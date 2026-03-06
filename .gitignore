@@ -1,0 +1,45 @@
+# ── Secrets & config locaux ────────────────────────────────────────────────
+.env
+.env.*
+*.env
+
+# ── Instructions Copilot (confidentielles) ─────────────────────────────────
+copilot-instructions.md
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Environnements virtuels ──────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Cache pipeline ───────────────────────────────────────────────────────────
+referential_mapping/data/
+
+# ── Outputs générés ──────────────────────────────────────────────────────────
+referential_mapping/data/outputs/
+
+# ── macOS artifacts ──────────────────────────────────────────────────────────
+.DS_Store
+__MACOSX/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user

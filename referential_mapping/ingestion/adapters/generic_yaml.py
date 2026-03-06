@@ -16,6 +16,7 @@ import re
 import yaml
 from pathlib import Path
 from referential_mapping.models import RequirementNormalized
+from referential_mapping.schemas import get_schema, FrameworkSchema
 
 
 def load(path: str, framework_name: str | None = None) -> list[RequirementNormalized]:
@@ -25,6 +26,7 @@ def load(path: str, framework_name: str | None = None) -> list[RequirementNormal
     """
     path = Path(path)
     framework = framework_name or _name_from_path(path)
+    schema = get_schema(framework)
 
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -33,14 +35,22 @@ def load(path: str, framework_name: str | None = None) -> list[RequirementNormal
     for section_num, section in data.items():
         if not isinstance(section, dict):
             continue
-        section_title = str(section.get("title", "")).strip()
+        section_title  = str(section.get("title", "")).strip()
         section_prefix = str(section.get("prefix", "")).strip()
+
+        # Résolution de l'ID de section (overwrite_ids pour ISO 27001, etc.)
+        effective_id = str(
+            schema.effective_section_id(section_num) if schema else section_num
+        )
+
         _extract(
             node=section,
             framework=framework,
-            id_prefix=section_prefix or str(section_num),
+            id_prefix=section_prefix or effective_id,
             parent_tags=[section_title] if section_title else [],
             requirements=requirements,
+            schema=schema,
+            section_key=section_num,
         )
 
     return requirements
@@ -52,6 +62,8 @@ def _extract(
     id_prefix: str,
     parent_tags: list[str],
     requirements: list[RequirementNormalized],
+    schema: FrameworkSchema | None = None,
+    section_key=None,
 ) -> None:
     # ── 1. Exigences plates : {n}_label ou {n}_desc (si pas de label) ─────────
     # Collecter tous les indices numériques présents
@@ -103,6 +115,7 @@ def _extract(
             id_prefix=sub_id,
             parent_tags=new_tags,
             requirements=requirements,
+            schema=schema,
         )
 
 

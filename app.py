@@ -38,9 +38,12 @@ _MPLRC_LIGHT = {
 }
 plt.rcParams.update(_MPLRC_DARK)   # défaut dark ; mis à jour en runtime si light
 
-from referential_mapping.ingestion.registry import list_frameworks, load_framework
-from referential_mapping.semantic.similarity import _select_pairs
-from referential_mapping.config import EMBEDDING_MODEL, SEMANTIC_THRESHOLD, TOP_K, LLM_MODEL
+import pipeline_standalone as ps
+from pipeline_standalone import (
+    list_frameworks, load_framework, get_expected_count,
+    _select_pairs,
+    EMBEDDING_MODEL, SEMANTIC_THRESHOLD, TOP_K, LLM_MODEL,
+)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -625,7 +628,13 @@ if run_btn:
         t0 = time.time()
         ref_A = load_framework(frameworks[ref_a_name], framework_name=ref_a_name)
         ref_B = load_framework(frameworks[ref_b_name], framework_name=ref_b_name)
-        s.update(label=f"✅ Étape 1 — {len(ref_A)} exigences A · {len(ref_B)} exigences B  ({time.time()-t0:.1f}s)")
+        exp_A = get_expected_count(ref_a_name)
+        exp_B = get_expected_count(ref_b_name)
+        lbl_A = f"{len(ref_A)}/{exp_A}" if exp_A else str(len(ref_A))
+        lbl_B = f"{len(ref_B)}/{exp_B}" if exp_B else str(len(ref_B))
+        ok_A  = "✅" if (exp_A is None or len(ref_A) == exp_A) else "⚠️"
+        ok_B  = "✅" if (exp_B is None or len(ref_B) == exp_B) else "⚠️"
+        s.update(label=f"{ok_A} Étape 1 — A : {lbl_A} exigences · {ok_B} B : {lbl_B} exigences  ({time.time()-t0:.1f}s)")
     results["ref_A"] = ref_A
     results["ref_B"] = ref_B
 
@@ -641,9 +650,8 @@ if run_btn:
         matrix = emb_A @ emb_B.T
 
         # Override config seuil/top_k avec les sliders UI
-        import referential_mapping.config as cfg
-        cfg.SEMANTIC_THRESHOLD = sem_thresh
-        cfg.TOP_K = top_k
+        ps.SEMANTIC_THRESHOLD = sem_thresh
+        ps.TOP_K = top_k
         candidates = _select_pairs(ref_A, ref_B, matrix)
 
         total_combinations = len(ref_A) * len(ref_B)
@@ -677,11 +685,9 @@ if run_btn:
         with st.status("**Étape 4** — Scoring LLM ...", expanded=True) as s:
             t0 = time.time()
             os.environ["OPENAI_API_KEY"] = api_key
-            import referential_mapping.config as cfg
-            cfg.LLM_MODEL = llm_model
-            from referential_mapping.llm.scorer import run as score_llm
+            ps.LLM_MODEL = llm_model
             # On ne cache pas ici (demo), on force toujours
-            relations = score_llm(candidates, ref_A, ref_B, force=True)
+            relations = ps.run_scorer(candidates, ref_A, ref_B, force=True)
             s.update(label=f"✅ Étape 4 — {len(relations)} relations scorées en {time.time()-t0:.1f}s")
     elif run_llm and not api_key:
         st.error("❌ Clé OpenAI manquante.")
@@ -846,8 +852,7 @@ if st.session_state.results:
 
             # Excel
             try:
-                from referential_mapping.config import OUTPUT_DIR
-                xlsx_path = OUTPUT_DIR / f"mapping_{ref_a_name}_vs_{ref_b_name}.xlsx"
+                xlsx_path = ps.OUTPUT_DIR / f"mapping_{ref_a_name}_vs_{ref_b_name}.xlsx"
                 if xlsx_path.exists():
                     with open(xlsx_path, "rb") as f:
                         st.download_button(
