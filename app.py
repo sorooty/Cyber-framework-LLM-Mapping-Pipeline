@@ -576,8 +576,14 @@ with st.sidebar:
     st.subheader("🤖 Étape 4 — LLM")
     run_llm = st.checkbox("Activer le scoring LLM", value=False)
     if run_llm:
-        api_key = st.text_input("OpenAI API Key", type="password",
-                                 value=os.environ.get("OPENAI_API_KEY", ""))
+        # Priorité : st.secrets (Streamlit Cloud) > .env local > saisie manuelle
+        _secret_key = st.secrets.get("OPENAI_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+        api_key = st.text_input(
+            "OpenAI API Key",
+            type="password",
+            value=_secret_key,
+            placeholder="sk-... (laisse vide si configuré dans Streamlit secrets)",
+        )
         llm_model = st.selectbox("Modèle", ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
                                   index=0)
     else:
