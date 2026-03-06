@@ -1,17 +1,23 @@
-# Déjà présents dans le venv
+# Variables d environnement
+python-dotenv
+
+# Parsing & data
 pandas>=3.0.1
 numpy>=2.4.2
 openpyxl>=3.1.5
 pyyaml>=6.0.3
 
-# Étape 2 — embeddings & similarité sémantique
+# Etape 2 - embeddings & similarite semantique
 sentence-transformers
 scipy
 
-# Étape 3 — visualisation matrice de corrélation
+# Etape 3 - visualisation
 seaborn
 matplotlib
 
-# Étape 4 — validation LLM output & appels API
+# Etape 4 - LLM
 pydantic>=2.0
 openai
+
+# UI
+streamlit
