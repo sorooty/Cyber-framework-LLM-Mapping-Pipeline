@@ -592,9 +592,7 @@ with st.sidebar:
 # ── Theme detection (matplotlib palette) ─────────────────────────────────────
 _is_light = st.get_option("theme.base") == "light"
 plt.rcParams.update(_MPLRC_LIGHT if _is_light else _MPLRC_DARK)
-_heatmap_cmap = (sns.light_palette("#00b248", as_cmap=True)
-                 if _is_light else
-                 sns.color_palette("light:#00e676", as_cmap=True))
+_heatmap_cmap = "RdYlGn"   # contraste clair : rouge=faible, vert=fort
 _hist_color  = "#00b248" if _is_light else "#00e676"
 _pie_colors  = (["#00b248","#f5aa00","#e65a00","#1e88e5","#9e9e9e"]
                 if _is_light else
@@ -663,18 +661,23 @@ if run_btn:
     # ── Étape 3 ──────────────────────────────────────────────────────────────
     with st.status("**Étape 3** — Génération de la heatmap ...", expanded=True) as s:
         t0 = time.time()
-        fig, ax = plt.subplots(figsize=(max(14, len(ref_B) * 0.2), max(10, len(ref_A) * 0.12)))
+        # Taille cappée : max 20×14 pour rester lisible dans l'UI
+        fig_w = min(20, max(10, len(ref_B) * 0.13))
+        fig_h = min(14, max(7,  len(ref_A) * 0.08))
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        # vmin dynamique au 5e percentile → contraste maximal sur la plage réelle
+        vmin_dynamic = float(np.percentile(matrix, 5))
         sns.heatmap(matrix,
                     xticklabels=[r.id for r in ref_B],
                     yticklabels=[r.id for r in ref_A],
                     cmap=_heatmap_cmap,
-                    vmin=0, vmax=1, ax=ax,
+                    vmin=vmin_dynamic, vmax=1.0, ax=ax,
                     linewidths=0, cbar_kws={"label": "Similarité cosinus"})
-        ax.set_title(f"Similarité sémantique — {ref_a_name} (A) ↔ {ref_b_name} (B)", fontsize=12)
-        ax.set_xlabel("Ref B", fontsize=10)
-        ax.set_ylabel("Ref A", fontsize=10)
-        ax.tick_params(axis="x", labelsize=5, rotation=90)
-        ax.tick_params(axis="y", labelsize=5)
+        ax.set_title(f"Similarité sémantique — {ref_a_name} (A) ↔ {ref_b_name} (B)", fontsize=11)
+        ax.set_xlabel("Ref B", fontsize=9)
+        ax.set_ylabel("Ref A", fontsize=9)
+        ax.tick_params(axis="x", labelsize=4, rotation=90)
+        ax.tick_params(axis="y", labelsize=4)
         plt.tight_layout()
         results["heatmap_fig"] = fig
         s.update(label=f"✅ Étape 3 — Heatmap générée en {time.time()-t0:.1f}s")

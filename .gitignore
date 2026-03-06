@@ -34,6 +34,9 @@ referential_mapping/data/
 # ── Outputs générés ──────────────────────────────────────────────────────────
 referential_mapping/data/outputs/
 
+# ── Documentation interne (générée / brouillons) ─────────────────────────────
+docs/
+
 # ── macOS artifacts ──────────────────────────────────────────────────────────
 .DS_Store
 __MACOSX/
