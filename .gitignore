@@ -27,6 +27,7 @@ ENV/
 # ── Jupyter ──────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+*.ipynb
 
 # ── Cache pipeline ───────────────────────────────────────────────────────────
 referential_mapping/data/
@@ -36,6 +37,10 @@ referential_mapping/data/outputs/
 
 # ── Documentation interne (générée / brouillons) ─────────────────────────────
 docs/
+
+# ── Fichiers de mapping propriétaires ────────────────────────────────────────
+files/*.xlsx
+files/*.xls
 
 # ── macOS artifacts ──────────────────────────────────────────────────────────
 .DS_Store
