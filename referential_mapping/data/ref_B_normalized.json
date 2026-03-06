@@ -1,0 +1,1062 @@
+[
+  {
+    "id": "GV.OC-01",
+    "framework": "NIST_CSF_v2",
+    "title": "La mission organisationnelle est comprise et oriente la gestion des risques de cybersécurité",
+    "description": "Les circonstances — mission, attentes des parties prenantes, dépendances et exigences légales, réglementaires et contractuelles — entourant les décisions de gestion des risques de cybersécurité de l'organisation sont comprises",
+    "tags": [
+      "Gouverner",
+      "GV.OC"
+    ]
+  },
+  {
+    "id": "GV.OC-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les parties prenantes internes et externes sont comprises, et leurs besoins et attentes concernant la gestion des risques de cybersécurité sont compris et pris en compte",
+    "description": "Les circonstances — mission, attentes des parties prenantes, dépendances et exigences légales, réglementaires et contractuelles — entourant les décisions de gestion des risques de cybersécurité de l'organisation sont comprises",
+    "tags": [
+      "Gouverner",
+      "GV.OC"
+    ]
+  },
+  {
+    "id": "GV.OC-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les exigences légales, réglementaires et contractuelles concernant la cybersécurité — y compris les obligations en matière de confidentialité et de libertés civiles — sont comprises et gérées",
+    "description": "Les circonstances — mission, attentes des parties prenantes, dépendances et exigences légales, réglementaires et contractuelles — entourant les décisions de gestion des risques de cybersécurité de l'organisation sont comprises",
+    "tags": [
+      "Gouverner",
+      "GV.OC"
+    ]
+  },
+  {
+    "id": "GV.OC-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les objectifs, capacités et services critiques dont dépendent les parties prenantes externes ou qu'elles attendent de l'organisation sont compris et communiqués",
+    "description": "Les circonstances — mission, attentes des parties prenantes, dépendances et exigences légales, réglementaires et contractuelles — entourant les décisions de gestion des risques de cybersécurité de l'organisation sont comprises",
+    "tags": [
+      "Gouverner",
+      "GV.OC"
+    ]
+  },
+  {
+    "id": "GV.OC-05",
+    "framework": "NIST_CSF_v2",
+    "title": "Les résultats, capacités et services dont dépend l'organisation sont compris et communiqués",
+    "description": "Les circonstances — mission, attentes des parties prenantes, dépendances et exigences légales, réglementaires et contractuelles — entourant les décisions de gestion des risques de cybersécurité de l'organisation sont comprises",
+    "tags": [
+      "Gouverner",
+      "GV.OC"
+    ]
+  },
+  {
+    "id": "GV.RM-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les objectifs de gestion des risques sont établis et approuvés par les parties prenantes de l'organisation",
+    "description": "Les priorités, contraintes, déclarations de tolérance et d'appétence au risque, et hypothèses de l'organisation sont établies, communiquées et utilisées pour soutenir les décisions opérationnelles en matière de risque",
+    "tags": [
+      "Gouverner",
+      "GV.RM"
+    ]
+  },
+  {
+    "id": "GV.RM-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les déclarations d'appétence et de tolérance au risque sont établies, communiquées et maintenues",
+    "description": "Les priorités, contraintes, déclarations de tolérance et d'appétence au risque, et hypothèses de l'organisation sont établies, communiquées et utilisées pour soutenir les décisions opérationnelles en matière de risque",
+    "tags": [
+      "Gouverner",
+      "GV.RM"
+    ]
+  },
+  {
+    "id": "GV.RM-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les activités et résultats de gestion des risques de cybersécurité sont inclus dans les processus de gestion des risques de l'entreprise",
+    "description": "Les priorités, contraintes, déclarations de tolérance et d'appétence au risque, et hypothèses de l'organisation sont établies, communiquées et utilisées pour soutenir les décisions opérationnelles en matière de risque",
+    "tags": [
+      "Gouverner",
+      "GV.RM"
+    ]
+  },
+  {
+    "id": "GV.RM-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Une orientation stratégique décrivant les options appropriées de réponse aux risques est établie et communiquée",
+    "description": "Les priorités, contraintes, déclarations de tolérance et d'appétence au risque, et hypothèses de l'organisation sont établies, communiquées et utilisées pour soutenir les décisions opérationnelles en matière de risque",
+    "tags": [
+      "Gouverner",
+      "GV.RM"
+    ]
+  },
+  {
+    "id": "GV.RM-05",
+    "framework": "NIST_CSF_v2",
+    "title": "Des lignes de communication sont établies au sein de l'organisation pour les risques de cybersécurité, y compris les risques provenant des fournisseurs et autres tiers",
+    "description": "Les priorités, contraintes, déclarations de tolérance et d'appétence au risque, et hypothèses de l'organisation sont établies, communiquées et utilisées pour soutenir les décisions opérationnelles en matière de risque",
+    "tags": [
+      "Gouverner",
+      "GV.RM"
+    ]
+  },
+  {
+    "id": "GV.RM-06",
+    "framework": "NIST_CSF_v2",
+    "title": "Une méthode standardisée pour calculer, documenter, catégoriser et prioriser les risques de cybersécurité est établie et communiquée",
+    "description": "Les priorités, contraintes, déclarations de tolérance et d'appétence au risque, et hypothèses de l'organisation sont établies, communiquées et utilisées pour soutenir les décisions opérationnelles en matière de risque",
+    "tags": [
+      "Gouverner",
+      "GV.RM"
+    ]
+  },
+  {
+    "id": "GV.RM-07",
+    "framework": "NIST_CSF_v2",
+    "title": "Les opportunités stratégiques (c'est-à-dire les risques positifs) sont caractérisées et incluses dans les discussions sur les risques de cybersécurité de l'organisation",
+    "description": "Les priorités, contraintes, déclarations de tolérance et d'appétence au risque, et hypothèses de l'organisation sont établies, communiquées et utilisées pour soutenir les décisions opérationnelles en matière de risque",
+    "tags": [
+      "Gouverner",
+      "GV.RM"
+    ]
+  },
+  {
+    "id": "GV.RR-01",
+    "framework": "NIST_CSF_v2",
+    "title": "La direction de l'organisation est responsable et redevable des risques de cybersécurité et favorise une culture consciente des risques, éthique et en amélioration continue",
+    "description": "Les rôles, responsabilités et autorités en matière de cybersécurité pour favoriser la responsabilisation, l'évaluation des performances et l'amélioration continue sont établis et communiqués",
+    "tags": [
+      "Gouverner",
+      "GV.RR"
+    ]
+  },
+  {
+    "id": "GV.RR-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les rôles, responsabilités et autorités liés à la gestion des risques de cybersécurité sont établis, communiqués, compris et appliqués",
+    "description": "Les rôles, responsabilités et autorités en matière de cybersécurité pour favoriser la responsabilisation, l'évaluation des performances et l'amélioration continue sont établis et communiqués",
+    "tags": [
+      "Gouverner",
+      "GV.RR"
+    ]
+  },
+  {
+    "id": "GV.RR-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Des ressources adéquates sont allouées en fonction de la stratégie de risque de cybersécurité, des rôles, des responsabilités et des politiques",
+    "description": "Les rôles, responsabilités et autorités en matière de cybersécurité pour favoriser la responsabilisation, l'évaluation des performances et l'amélioration continue sont établis et communiqués",
+    "tags": [
+      "Gouverner",
+      "GV.RR"
+    ]
+  },
+  {
+    "id": "GV.RR-04",
+    "framework": "NIST_CSF_v2",
+    "title": "La cybersécurité est incluse dans les pratiques de ressources humaines",
+    "description": "Les rôles, responsabilités et autorités en matière de cybersécurité pour favoriser la responsabilisation, l'évaluation des performances et l'amélioration continue sont établis et communiqués",
+    "tags": [
+      "Gouverner",
+      "GV.RR"
+    ]
+  },
+  {
+    "id": "GV.PO-01",
+    "framework": "NIST_CSF_v2",
+    "title": "La politique de gestion des risques de cybersécurité est établie en fonction du contexte organisationnel, de la stratégie de cybersécurité et des priorités, et est communiquée et appliquée",
+    "description": "La politique de cybersécurité organisationnelle est établie, communiquée et appliquée",
+    "tags": [
+      "Gouverner",
+      "GV.PO"
+    ]
+  },
+  {
+    "id": "GV.PO-02",
+    "framework": "NIST_CSF_v2",
+    "title": "La politique de gestion des risques de cybersécurité est revue, mise à jour, communiquée et appliquée pour refléter les changements dans les exigences, les menaces, la technologie et la mission organisationnelle",
+    "description": "La politique de cybersécurité organisationnelle est établie, communiquée et appliquée",
+    "tags": [
+      "Gouverner",
+      "GV.PO"
+    ]
+  },
+  {
+    "id": "GV.OV-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les résultats de la stratégie de gestion des risques de cybersécurité sont examinés pour informer et ajuster la stratégie et l'orientation",
+    "description": "Les résultats des activités de gestion des risques de cybersécurité à l'échelle de l'organisation et les performances sont utilisés pour informer, améliorer et ajuster la stratégie de gestion des risques",
+    "tags": [
+      "Gouverner",
+      "GV.OV"
+    ]
+  },
+  {
+    "id": "GV.OV-02",
+    "framework": "NIST_CSF_v2",
+    "title": "La stratégie de gestion des risques de cybersécurité est revue et ajustée pour assurer la couverture des exigences et des risques organisationnels",
+    "description": "Les résultats des activités de gestion des risques de cybersécurité à l'échelle de l'organisation et les performances sont utilisés pour informer, améliorer et ajuster la stratégie de gestion des risques",
+    "tags": [
+      "Gouverner",
+      "GV.OV"
+    ]
+  },
+  {
+    "id": "GV.OV-03",
+    "framework": "NIST_CSF_v2",
+    "title": "La performance de la gestion des risques de cybersécurité de l'organisation est évaluée et examinée pour les ajustements nécessaires",
+    "description": "Les résultats des activités de gestion des risques de cybersécurité à l'échelle de l'organisation et les performances sont utilisés pour informer, améliorer et ajuster la stratégie de gestion des risques",
+    "tags": [
+      "Gouverner",
+      "GV.OV"
+    ]
+  },
+  {
+    "id": "GV.SC-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Un programme, une stratégie, des objectifs, des politiques et des processus de gestion des risques de la chaîne d'approvisionnement en cybersécurité sont établis et approuvés par les parties prenantes de l'organisation",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les rôles et responsabilités en matière de cybersécurité pour les fournisseurs, clients et partenaires sont établis, communiqués et coordonnés en interne et en externe",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-03",
+    "framework": "NIST_CSF_v2",
+    "title": "La gestion des risques de la chaîne d'approvisionnement en cybersécurité est intégrée dans la cybersécurité et la gestion des risques de l'entreprise, l'évaluation des risques et les processus d'amélioration",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les fournisseurs sont connus et priorisés par criticité",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-05",
+    "framework": "NIST_CSF_v2",
+    "title": "Les exigences pour traiter les risques de cybersécurité dans les chaînes d'approvisionnement sont établies, priorisées et intégrées dans les contrats et autres types d'accords avec les fournisseurs et autres tiers pertinents",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-06",
+    "framework": "NIST_CSF_v2",
+    "title": "La planification et la diligence raisonnable sont effectuées pour réduire les risques avant d'entrer dans des relations formelles avec des fournisseurs ou d'autres tiers",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-07",
+    "framework": "NIST_CSF_v2",
+    "title": "Les risques posés par un fournisseur, ses produits et services, et d'autres tiers sont compris, enregistrés, priorisés, évalués, traités et surveillés tout au long de la relation",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-08",
+    "framework": "NIST_CSF_v2",
+    "title": "Les fournisseurs et autres tiers pertinents sont inclus dans la planification, la réponse et la récupération des incidents",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-09",
+    "framework": "NIST_CSF_v2",
+    "title": "Les pratiques de sécurité de la chaîne d'approvisionnement sont intégrées dans les programmes de cybersécurité et de gestion des risques de l'entreprise, et leurs performances sont surveillées tout au long du cycle de vie du produit et du service technologique",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "GV.SC-10",
+    "framework": "NIST_CSF_v2",
+    "title": "Les plans de gestion des risques de la chaîne d'approvisionnement en cybersécurité incluent des dispositions pour les activités qui se produisent après la conclusion d'un partenariat ou d'un accord de service",
+    "description": "Les processus de gestion des risques de la chaîne d'approvisionnement cyber sont identifiés, établis, gérés, surveillés et améliorés par les parties prenantes de l'organisation",
+    "tags": [
+      "Gouverner",
+      "GV.SC"
+    ]
+  },
+  {
+    "id": "ID.AM-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les inventaires du matériel géré par l'organisation sont maintenus",
+    "description": "Les actifs (par exemple, données, matériel, logiciels, systèmes, installations, services, personnes) qui permettent à l'organisation d'atteindre ses objectifs commerciaux sont identifiés et gérés en fonction de leur importance relative pour les objectifs organisationnels et la stratégie de risque de l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.AM"
+    ]
+  },
+  {
+    "id": "ID.AM-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les inventaires des logiciels, services et systèmes gérés par l'organisation sont maintenus",
+    "description": "Les actifs (par exemple, données, matériel, logiciels, systèmes, installations, services, personnes) qui permettent à l'organisation d'atteindre ses objectifs commerciaux sont identifiés et gérés en fonction de leur importance relative pour les objectifs organisationnels et la stratégie de risque de l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.AM"
+    ]
+  },
+  {
+    "id": "ID.AM-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les représentations des communications réseau autorisées de l'organisation et des flux de données internes et externes sont maintenues",
+    "description": "Les actifs (par exemple, données, matériel, logiciels, systèmes, installations, services, personnes) qui permettent à l'organisation d'atteindre ses objectifs commerciaux sont identifiés et gérés en fonction de leur importance relative pour les objectifs organisationnels et la stratégie de risque de l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.AM"
+    ]
+  },
+  {
+    "id": "ID.AM-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les inventaires des services fournis par les fournisseurs sont maintenus",
+    "description": "Les actifs (par exemple, données, matériel, logiciels, systèmes, installations, services, personnes) qui permettent à l'organisation d'atteindre ses objectifs commerciaux sont identifiés et gérés en fonction de leur importance relative pour les objectifs organisationnels et la stratégie de risque de l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.AM"
+    ]
+  },
+  {
+    "id": "ID.AM-05",
+    "framework": "NIST_CSF_v2",
+    "title": "Les actifs sont priorisés en fonction de leur classification, criticité, ressources et impact sur la mission",
+    "description": "Les actifs (par exemple, données, matériel, logiciels, systèmes, installations, services, personnes) qui permettent à l'organisation d'atteindre ses objectifs commerciaux sont identifiés et gérés en fonction de leur importance relative pour les objectifs organisationnels et la stratégie de risque de l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.AM"
+    ]
+  },
+  {
+    "id": "ID.AM-07",
+    "framework": "NIST_CSF_v2",
+    "title": "Les inventaires des données et des métadonnées correspondantes pour les types de données désignés sont maintenus",
+    "description": "Les actifs (par exemple, données, matériel, logiciels, systèmes, installations, services, personnes) qui permettent à l'organisation d'atteindre ses objectifs commerciaux sont identifiés et gérés en fonction de leur importance relative pour les objectifs organisationnels et la stratégie de risque de l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.AM"
+    ]
+  },
+  {
+    "id": "ID.AM-08",
+    "framework": "NIST_CSF_v2",
+    "title": "Les systèmes, le matériel, les logiciels, les services et les données sont gérés tout au long de leur cycle de vie",
+    "description": "Les actifs (par exemple, données, matériel, logiciels, systèmes, installations, services, personnes) qui permettent à l'organisation d'atteindre ses objectifs commerciaux sont identifiés et gérés en fonction de leur importance relative pour les objectifs organisationnels et la stratégie de risque de l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.AM"
+    ]
+  },
+  {
+    "id": "ID.RA-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les vulnérabilités des actifs sont identifiées, validées et enregistrées",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les renseignements sur les cybermenaces sont reçus des forums et sources de partage d'informations",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les menaces internes et externes à l'organisation sont identifiées et enregistrées",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les impacts potentiels et les probabilités des menaces exploitant les vulnérabilités sont identifiés et enregistrés",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-05",
+    "framework": "NIST_CSF_v2",
+    "title": "Les menaces, vulnérabilités, probabilités et impacts sont utilisés pour comprendre le risque inhérent et informer la priorisation de la réponse aux risques",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-06",
+    "framework": "NIST_CSF_v2",
+    "title": "Les réponses aux risques sont choisies, priorisées, planifiées, suivies et communiquées",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-07",
+    "framework": "NIST_CSF_v2",
+    "title": "Les changements et exceptions sont gérés, évalués pour leur impact sur le risque, enregistrés et suivis",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-08",
+    "framework": "NIST_CSF_v2",
+    "title": "Des processus pour recevoir, analyser et répondre aux divulgations de vulnérabilités sont établis",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-09",
+    "framework": "NIST_CSF_v2",
+    "title": "L'authenticité et l'intégrité du matériel et des logiciels sont évaluées avant l'acquisition et l'utilisation",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.RA-10",
+    "framework": "NIST_CSF_v2",
+    "title": "Les fournisseurs critiques sont évalués avant l'acquisition",
+    "description": "Le risque de cybersécurité pour l'organisation, les actifs et les individus est compris par l'organisation",
+    "tags": [
+      "Identifier",
+      "ID.RA"
+    ]
+  },
+  {
+    "id": "ID.IM-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les améliorations sont identifiées à partir des évaluations",
+    "description": "Les améliorations des processus, procédures et activités de gestion des risques de cybersécurité de l'organisation sont identifiées dans toutes les fonctions du CSF",
+    "tags": [
+      "Identifier",
+      "ID.IM"
+    ]
+  },
+  {
+    "id": "ID.IM-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les améliorations sont identifiées à partir des tests et exercices de sécurité, y compris ceux effectués en coordination avec les fournisseurs et les tiers pertinents",
+    "description": "Les améliorations des processus, procédures et activités de gestion des risques de cybersécurité de l'organisation sont identifiées dans toutes les fonctions du CSF",
+    "tags": [
+      "Identifier",
+      "ID.IM"
+    ]
+  },
+  {
+    "id": "ID.IM-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les améliorations sont identifiées à partir de l'exécution des processus, procédures et activités opérationnels",
+    "description": "Les améliorations des processus, procédures et activités de gestion des risques de cybersécurité de l'organisation sont identifiées dans toutes les fonctions du CSF",
+    "tags": [
+      "Identifier",
+      "ID.IM"
+    ]
+  },
+  {
+    "id": "ID.IM-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les plans de réponse aux incidents et autres plans de cybersécurité qui affectent les opérations sont établis, communiqués, maintenus et améliorés",
+    "description": "Les améliorations des processus, procédures et activités de gestion des risques de cybersécurité de l'organisation sont identifiées dans toutes les fonctions du CSF",
+    "tags": [
+      "Identifier",
+      "ID.IM"
+    ]
+  },
+  {
+    "id": "PR.AA-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les identités et les informations d'identification des utilisateurs, services et matériels autorisés sont gérées par l'organisation",
+    "description": "L'accès aux actifs physiques et logiques est limité aux utilisateurs, services et matériels autorisés et géré en fonction du risque évalué d'accès non autorisé",
+    "tags": [
+      "Protéger",
+      "PR.AA"
+    ]
+  },
+  {
+    "id": "PR.AA-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les identités sont vérifiées et liées aux informations d'identification en fonction du contexte des interactions",
+    "description": "L'accès aux actifs physiques et logiques est limité aux utilisateurs, services et matériels autorisés et géré en fonction du risque évalué d'accès non autorisé",
+    "tags": [
+      "Protéger",
+      "PR.AA"
+    ]
+  },
+  {
+    "id": "PR.AA-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les utilisateurs, services et matériels sont authentifiés",
+    "description": "L'accès aux actifs physiques et logiques est limité aux utilisateurs, services et matériels autorisés et géré en fonction du risque évalué d'accès non autorisé",
+    "tags": [
+      "Protéger",
+      "PR.AA"
+    ]
+  },
+  {
+    "id": "PR.AA-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les assertions d'identité sont protégées, transmises et vérifiées",
+    "description": "L'accès aux actifs physiques et logiques est limité aux utilisateurs, services et matériels autorisés et géré en fonction du risque évalué d'accès non autorisé",
+    "tags": [
+      "Protéger",
+      "PR.AA"
+    ]
+  },
+  {
+    "id": "PR.AA-05",
+    "framework": "NIST_CSF_v2",
+    "title": "Les permissions d'accès, les droits et les autorisations sont définis dans une politique, gérés, appliqués et examinés, et intègrent les principes du moindre privilège et de la séparation des tâches",
+    "description": "L'accès aux actifs physiques et logiques est limité aux utilisateurs, services et matériels autorisés et géré en fonction du risque évalué d'accès non autorisé",
+    "tags": [
+      "Protéger",
+      "PR.AA"
+    ]
+  },
+  {
+    "id": "PR.AA-06",
+    "framework": "NIST_CSF_v2",
+    "title": "L'accès physique aux actifs est géré, surveillé et appliqué en fonction du risque",
+    "description": "L'accès aux actifs physiques et logiques est limité aux utilisateurs, services et matériels autorisés et géré en fonction du risque évalué d'accès non autorisé",
+    "tags": [
+      "Protéger",
+      "PR.AA"
+    ]
+  },
+  {
+    "id": "PR.AT-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Le personnel reçoit une sensibilisation et une formation afin de posséder les connaissances et les compétences pour effectuer les tâches générales en tenant compte des risques de cybersécurité",
+    "description": "Le personnel de l'organisation reçoit une sensibilisation et une formation à la cybersécurité afin de pouvoir effectuer ses tâches liées à la cybersécurité",
+    "tags": [
+      "Protéger",
+      "PR.AT"
+    ]
+  },
+  {
+    "id": "PR.AT-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les personnes occupant des rôles spécialisés reçoivent une sensibilisation et une formation afin de posséder les connaissances et les compétences pour effectuer les tâches pertinentes en tenant compte des risques de cybersécurité",
+    "description": "Le personnel de l'organisation reçoit une sensibilisation et une formation à la cybersécurité afin de pouvoir effectuer ses tâches liées à la cybersécurité",
+    "tags": [
+      "Protéger",
+      "PR.AT"
+    ]
+  },
+  {
+    "id": "PR.DS-01",
+    "framework": "NIST_CSF_v2",
+    "title": "La confidentialité, l'intégrité et la disponibilité des données au repos sont protégées",
+    "description": "Les données sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des informations",
+    "tags": [
+      "Protéger",
+      "PR.DS"
+    ]
+  },
+  {
+    "id": "PR.DS-02",
+    "framework": "NIST_CSF_v2",
+    "title": "La confidentialité, l'intégrité et la disponibilité des données en transit sont protégées",
+    "description": "Les données sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des informations",
+    "tags": [
+      "Protéger",
+      "PR.DS"
+    ]
+  },
+  {
+    "id": "PR.DS-10",
+    "framework": "NIST_CSF_v2",
+    "title": "La confidentialité, l'intégrité et la disponibilité des données en cours d'utilisation sont protégées",
+    "description": "Les données sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des informations",
+    "tags": [
+      "Protéger",
+      "PR.DS"
+    ]
+  },
+  {
+    "id": "PR.DS-11",
+    "framework": "NIST_CSF_v2",
+    "title": "Des sauvegardes de données sont créées, protégées, maintenues et testées",
+    "description": "Les données sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des informations",
+    "tags": [
+      "Protéger",
+      "PR.DS"
+    ]
+  },
+  {
+    "id": "PR.PS-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Des pratiques de gestion de la configuration sont établies et appliquées",
+    "description": "Le matériel, les logiciels (par exemple, micrologiciels, systèmes d'exploitation, applications) et les services des plateformes physiques et virtuelles sont gérés conformément à la stratégie de risque de l'organisation pour protéger leur confidentialité, intégrité et disponibilité",
+    "tags": [
+      "Protéger",
+      "PR.PS"
+    ]
+  },
+  {
+    "id": "PR.PS-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les logiciels sont maintenus, remplacés et supprimés en fonction du risque",
+    "description": "Le matériel, les logiciels (par exemple, micrologiciels, systèmes d'exploitation, applications) et les services des plateformes physiques et virtuelles sont gérés conformément à la stratégie de risque de l'organisation pour protéger leur confidentialité, intégrité et disponibilité",
+    "tags": [
+      "Protéger",
+      "PR.PS"
+    ]
+  },
+  {
+    "id": "PR.PS-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Le matériel est maintenu, remplacé et supprimé en fonction du risque",
+    "description": "Le matériel, les logiciels (par exemple, micrologiciels, systèmes d'exploitation, applications) et les services des plateformes physiques et virtuelles sont gérés conformément à la stratégie de risque de l'organisation pour protéger leur confidentialité, intégrité et disponibilité",
+    "tags": [
+      "Protéger",
+      "PR.PS"
+    ]
+  },
+  {
+    "id": "PR.PS-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Des journaux sont générés et mis à disposition pour une surveillance continue",
+    "description": "Le matériel, les logiciels (par exemple, micrologiciels, systèmes d'exploitation, applications) et les services des plateformes physiques et virtuelles sont gérés conformément à la stratégie de risque de l'organisation pour protéger leur confidentialité, intégrité et disponibilité",
+    "tags": [
+      "Protéger",
+      "PR.PS"
+    ]
+  },
+  {
+    "id": "PR.PS-05",
+    "framework": "NIST_CSF_v2",
+    "title": "L'installation et l'exécution de logiciels non autorisés sont empêchées",
+    "description": "Le matériel, les logiciels (par exemple, micrologiciels, systèmes d'exploitation, applications) et les services des plateformes physiques et virtuelles sont gérés conformément à la stratégie de risque de l'organisation pour protéger leur confidentialité, intégrité et disponibilité",
+    "tags": [
+      "Protéger",
+      "PR.PS"
+    ]
+  },
+  {
+    "id": "PR.PS-06",
+    "framework": "NIST_CSF_v2",
+    "title": "Des pratiques de développement logiciel sécurisé sont intégrées et leurs performances sont surveillées tout au long du cycle de vie du développement logiciel",
+    "description": "Le matériel, les logiciels (par exemple, micrologiciels, systèmes d'exploitation, applications) et les services des plateformes physiques et virtuelles sont gérés conformément à la stratégie de risque de l'organisation pour protéger leur confidentialité, intégrité et disponibilité",
+    "tags": [
+      "Protéger",
+      "PR.PS"
+    ]
+  },
+  {
+    "id": "PR.IR-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les réseaux et les environnements sont protégés contre l'accès et l'utilisation logiques non autorisés",
+    "description": "Les architectures de sécurité sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des actifs, ainsi que la résilience organisationnelle",
+    "tags": [
+      "Protéger",
+      "PR.IR"
+    ]
+  },
+  {
+    "id": "PR.IR-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les actifs technologiques de l'organisation sont protégés contre les menaces environnementales",
+    "description": "Les architectures de sécurité sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des actifs, ainsi que la résilience organisationnelle",
+    "tags": [
+      "Protéger",
+      "PR.IR"
+    ]
+  },
+  {
+    "id": "PR.IR-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Des mécanismes sont mis en place pour atteindre les exigences de résilience dans des situations normales et défavorables",
+    "description": "Les architectures de sécurité sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des actifs, ainsi que la résilience organisationnelle",
+    "tags": [
+      "Protéger",
+      "PR.IR"
+    ]
+  },
+  {
+    "id": "PR.IR-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Une capacité de ressources adéquate pour assurer la disponibilité est maintenue",
+    "description": "Les architectures de sécurité sont gérées conformément à la stratégie de risque de l'organisation pour protéger la confidentialité, l'intégrité et la disponibilité des actifs, ainsi que la résilience organisationnelle",
+    "tags": [
+      "Protéger",
+      "PR.IR"
+    ]
+  },
+  {
+    "id": "DE.CM-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les réseaux et services réseau sont surveillés pour détecter les événements potentiellement néfastes",
+    "description": "Les actifs sont surveillés pour détecter les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes",
+    "tags": [
+      "Détecter",
+      "DE.CM"
+    ]
+  },
+  {
+    "id": "DE.CM-02",
+    "framework": "NIST_CSF_v2",
+    "title": "L'environnement physique est surveillé pour détecter les événements potentiellement néfastes",
+    "description": "Les actifs sont surveillés pour détecter les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes",
+    "tags": [
+      "Détecter",
+      "DE.CM"
+    ]
+  },
+  {
+    "id": "DE.CM-03",
+    "framework": "NIST_CSF_v2",
+    "title": "L'activité du personnel et l'utilisation de la technologie sont surveillées pour détecter les événements potentiellement néfastes",
+    "description": "Les actifs sont surveillés pour détecter les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes",
+    "tags": [
+      "Détecter",
+      "DE.CM"
+    ]
+  },
+  {
+    "id": "DE.CM-06",
+    "framework": "NIST_CSF_v2",
+    "title": "Les activités et services des fournisseurs de services externes sont surveillés pour détecter les événements potentiellement néfastes",
+    "description": "Les actifs sont surveillés pour détecter les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes",
+    "tags": [
+      "Détecter",
+      "DE.CM"
+    ]
+  },
+  {
+    "id": "DE.CM-09",
+    "framework": "NIST_CSF_v2",
+    "title": "Le matériel et les logiciels informatiques, les environnements d'exécution et leurs données sont surveillés pour détecter les événements potentiellement néfastes",
+    "description": "Les actifs sont surveillés pour détecter les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes",
+    "tags": [
+      "Détecter",
+      "DE.CM"
+    ]
+  },
+  {
+    "id": "DE.AE-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Une base de référence des opérations réseau et des flux de données attendus pour les utilisateurs et les systèmes est établie et gérée",
+    "description": "Les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes sont analysés pour caractériser les événements et détecter les incidents de cybersécurité",
+    "tags": [
+      "Détecter",
+      "DE.AE"
+    ]
+  },
+  {
+    "id": "DE.AE-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les informations sont corrélées à partir de multiples sources",
+    "description": "Les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes sont analysés pour caractériser les événements et détecter les incidents de cybersécurité",
+    "tags": [
+      "Détecter",
+      "DE.AE"
+    ]
+  },
+  {
+    "id": "DE.AE-04",
+    "framework": "NIST_CSF_v2",
+    "title": "L'impact estimé et la portée des événements défavorables sont compris",
+    "description": "Les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes sont analysés pour caractériser les événements et détecter les incidents de cybersécurité",
+    "tags": [
+      "Détecter",
+      "DE.AE"
+    ]
+  },
+  {
+    "id": "DE.AE-06",
+    "framework": "NIST_CSF_v2",
+    "title": "Les informations sur les événements défavorables sont fournies au personnel et aux outils autorisés",
+    "description": "Les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes sont analysés pour caractériser les événements et détecter les incidents de cybersécurité",
+    "tags": [
+      "Détecter",
+      "DE.AE"
+    ]
+  },
+  {
+    "id": "DE.AE-07",
+    "framework": "NIST_CSF_v2",
+    "title": "Les renseignements sur les cybermenaces et autres informations contextuelles sont intégrés à l'analyse",
+    "description": "Les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes sont analysés pour caractériser les événements et détecter les incidents de cybersécurité",
+    "tags": [
+      "Détecter",
+      "DE.AE"
+    ]
+  },
+  {
+    "id": "DE.AE-08",
+    "framework": "NIST_CSF_v2",
+    "title": "Les incidents sont déclarés lorsque les événements défavorables répondent aux critères d'incident définis",
+    "description": "Les anomalies, les indicateurs de compromission et autres événements potentiellement néfastes sont analysés pour caractériser les événements et détecter les incidents de cybersécurité",
+    "tags": [
+      "Détecter",
+      "DE.AE"
+    ]
+  },
+  {
+    "id": "RS.MA-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Le plan de réponse aux incidents est exécuté en coordination avec les tiers concernés une fois qu'un incident est déclaré",
+    "description": "Les réponses aux incidents de cybersécurité détectés sont gérées",
+    "tags": [
+      "Répondre",
+      "RS.MA"
+    ]
+  },
+  {
+    "id": "RS.MA-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les rapports d'incidents sont triés et validés",
+    "description": "Les réponses aux incidents de cybersécurité détectés sont gérées",
+    "tags": [
+      "Répondre",
+      "RS.MA"
+    ]
+  },
+  {
+    "id": "RS.MA-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les incidents sont catégorisés et priorisés",
+    "description": "Les réponses aux incidents de cybersécurité détectés sont gérées",
+    "tags": [
+      "Répondre",
+      "RS.MA"
+    ]
+  },
+  {
+    "id": "RS.MA-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les incidents sont escaladés ou élevés selon les besoins",
+    "description": "Les réponses aux incidents de cybersécurité détectés sont gérées",
+    "tags": [
+      "Répondre",
+      "RS.MA"
+    ]
+  },
+  {
+    "id": "RS.MA-05",
+    "framework": "NIST_CSF_v2",
+    "title": "Les critères pour initier la récupération d'un incident sont appliqués",
+    "description": "Les réponses aux incidents de cybersécurité détectés sont gérées",
+    "tags": [
+      "Répondre",
+      "RS.MA"
+    ]
+  },
+  {
+    "id": "RS.AN-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Une analyse est effectuée pour établir ce qui s'est passé pendant un incident et la cause profonde de l'incident",
+    "description": "Des investigations sont menées pour assurer une réponse efficace et soutenir les activités de criminalistique et de récupération",
+    "tags": [
+      "Répondre",
+      "RS.AN"
+    ]
+  },
+  {
+    "id": "RS.AN-06",
+    "framework": "NIST_CSF_v2",
+    "title": "Les actions effectuées pendant une investigation sont enregistrées, et l'intégrité et la provenance des enregistrements sont préservées",
+    "description": "Des investigations sont menées pour assurer une réponse efficace et soutenir les activités de criminalistique et de récupération",
+    "tags": [
+      "Répondre",
+      "RS.AN"
+    ]
+  },
+  {
+    "id": "RS.AN-07",
+    "framework": "NIST_CSF_v2",
+    "title": "Les données et métadonnées de l'incident sont collectées, et leur intégrité et provenance sont préservées",
+    "description": "Des investigations sont menées pour assurer une réponse efficace et soutenir les activités de criminalistique et de récupération",
+    "tags": [
+      "Répondre",
+      "RS.AN"
+    ]
+  },
+  {
+    "id": "RS.AN-08",
+    "framework": "NIST_CSF_v2",
+    "title": "L'ampleur d'un incident est estimée et validée",
+    "description": "Des investigations sont menées pour assurer une réponse efficace et soutenir les activités de criminalistique et de récupération",
+    "tags": [
+      "Répondre",
+      "RS.AN"
+    ]
+  },
+  {
+    "id": "RS.CO-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les parties prenantes internes et externes sont notifiées des incidents",
+    "description": "Les activités de réponse sont coordonnées avec les parties prenantes internes et externes conformément aux lois, réglementations ou politiques",
+    "tags": [
+      "Répondre",
+      "RS.CO"
+    ]
+  },
+  {
+    "id": "RS.CO-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les informations sont partagées avec les parties prenantes internes et externes désignées",
+    "description": "Les activités de réponse sont coordonnées avec les parties prenantes internes et externes conformément aux lois, réglementations ou politiques",
+    "tags": [
+      "Répondre",
+      "RS.CO"
+    ]
+  },
+  {
+    "id": "RS.MI-01",
+    "framework": "NIST_CSF_v2",
+    "title": "Les incidents sont contenus",
+    "description": "Des activités sont effectuées pour prévenir l'expansion d'un événement et atténuer ses effets",
+    "tags": [
+      "Répondre",
+      "RS.MI"
+    ]
+  },
+  {
+    "id": "RS.MI-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les incidents sont éradiqués",
+    "description": "Des activités sont effectuées pour prévenir l'expansion d'un événement et atténuer ses effets",
+    "tags": [
+      "Répondre",
+      "RS.MI"
+    ]
+  },
+  {
+    "id": "RC.RP-01",
+    "framework": "NIST_CSF_v2",
+    "title": "La partie récupération du plan de réponse aux incidents est exécutée une fois initiée à partir du processus de réponse aux incidents",
+    "description": "Des activités de restauration sont effectuées pour assurer la disponibilité opérationnelle des systèmes et services affectés par les incidents de cybersécurité",
+    "tags": [
+      "Récupérer",
+      "RC.RP"
+    ]
+  },
+  {
+    "id": "RC.RP-02",
+    "framework": "NIST_CSF_v2",
+    "title": "Les actions de récupération sont sélectionnées, délimitées, priorisées et exécutées",
+    "description": "Des activités de restauration sont effectuées pour assurer la disponibilité opérationnelle des systèmes et services affectés par les incidents de cybersécurité",
+    "tags": [
+      "Récupérer",
+      "RC.RP"
+    ]
+  },
+  {
+    "id": "RC.RP-03",
+    "framework": "NIST_CSF_v2",
+    "title": "L'intégrité des sauvegardes et autres actifs de restauration est vérifiée avant de les utiliser pour la restauration",
+    "description": "Des activités de restauration sont effectuées pour assurer la disponibilité opérationnelle des systèmes et services affectés par les incidents de cybersécurité",
+    "tags": [
+      "Récupérer",
+      "RC.RP"
+    ]
+  },
+  {
+    "id": "RC.RP-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les fonctions critiques de la mission et la gestion des risques de cybersécurité sont prises en compte pour établir des normes opérationnelles post-incident",
+    "description": "Des activités de restauration sont effectuées pour assurer la disponibilité opérationnelle des systèmes et services affectés par les incidents de cybersécurité",
+    "tags": [
+      "Récupérer",
+      "RC.RP"
+    ]
+  },
+  {
+    "id": "RC.RP-05",
+    "framework": "NIST_CSF_v2",
+    "title": "L'intégrité des actifs restaurés est vérifiée, les systèmes et services sont restaurés, et le statut de fonctionnement normal est confirmé",
+    "description": "Des activités de restauration sont effectuées pour assurer la disponibilité opérationnelle des systèmes et services affectés par les incidents de cybersécurité",
+    "tags": [
+      "Récupérer",
+      "RC.RP"
+    ]
+  },
+  {
+    "id": "RC.RP-06",
+    "framework": "NIST_CSF_v2",
+    "title": "La fin de la récupération de l'incident est déclarée sur la base de critères, et la documentation liée à l'incident est complétée",
+    "description": "Des activités de restauration sont effectuées pour assurer la disponibilité opérationnelle des systèmes et services affectés par les incidents de cybersécurité",
+    "tags": [
+      "Récupérer",
+      "RC.RP"
+    ]
+  },
+  {
+    "id": "RC.CO-03",
+    "framework": "NIST_CSF_v2",
+    "title": "Les activités de récupération et les progrès dans la restauration des capacités opérationnelles sont communiqués aux parties prenantes internes et externes désignées",
+    "description": "Les activités de restauration sont coordonnées avec les parties internes et externes",
+    "tags": [
+      "Récupérer",
+      "RC.CO"
+    ]
+  },
+  {
+    "id": "RC.CO-04",
+    "framework": "NIST_CSF_v2",
+    "title": "Les mises à jour publiques sur la récupération de l'incident sont partagées en utilisant des méthodes et des messages approuvés",
+    "description": "Les activités de restauration sont coordonnées avec les parties internes et externes",
+    "tags": [
+      "Récupérer",
+      "RC.CO"
+    ]
+  }
+]
