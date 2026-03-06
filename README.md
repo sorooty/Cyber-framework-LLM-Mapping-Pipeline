@@ -52,34 +52,36 @@ High-scoring pairs go through a **second LLM pass** (double verification). Score
 
 ```
 RiskHunter/
-├── mapping_pipeline.ipynb          # Notebook — run the pipeline step by step
+├── app.py                          # Streamlit UI — interactive demo
+├── pipeline_standalone.py          # Single-file pipeline (all logic, no package dependency)
+├── pipeline_sandbox.ipynb          # Notebook — run the pipeline step by step
 ├── requirements.txt
-├── files/surveys/                  # Source YAML files (CIS, NIST, ISO, DORA, ...)
-└── referential_mapping/
+├── .env                            # OPENAI_API_KEY (local only, gitignored)
+├── files/
+│   ├── survey.ts                   # Structural schema for all frameworks
+│   └── surveys/                    # Source YAML files (40+ frameworks)
+└── referential_mapping/            # Original modular package
     ├── pipeline.py                 # CLI entrypoint
     ├── config.py                   # All thresholds & parameters
     ├── models.py                   # Shared data models
+    ├── schemas.py                  # FrameworkSchema + SCHEMAS registry
+    ├── survey_validator.py         # Validates parsed counts against survey.ts
     ├── ingestion/
     │   ├── ingester.py             # Step 1 orchestrator (with caching)
+    │   ├── registry.py             # Framework discovery (list_frameworks)
     │   └── adapters/
+    │       ├── generic_yaml.py     # Universal YAML parser
     │       ├── cis_v8.py           # CIS Controls v8 YAML parser
     │       └── nist_csf_v2.py      # NIST CSF v2 YAML parser
     ├── semantic/
     │   └── similarity.py           # Step 2 — embeddings + cosine similarity
     ├── visualization/
     │   └── heatmap.py              # Step 3 — seaborn heatmap
-    ├── llm/
-    │   └── scorer.py               # Step 4 — async LLM scoring + Excel export
-    └── data/
-        ├── ref_A_normalized.json   # Step 1 cache
-        ├── ref_B_normalized.json
-        ├── candidate_pairs.json    # Step 2 cache
-        ├── similarity_matrix.npy
-        └── outputs/
-            ├── correlation_matrix.png
-            ├── mapping_results.xlsx
-            └── mapping_relations.json
+    └── llm/
+        └── scorer.py               # Step 4 — async LLM scoring + Excel export
 ```
+
+> **`pipeline_standalone.py`** consolidates the entire `referential_mapping/` package into a single importable file. `app.py` uses it exclusively.
 
 ---
 
@@ -90,22 +92,22 @@ RiskHunter/
 pip install -r requirements.txt
 ```
 
-### Run via notebook
+### Run the Streamlit app
 ```bash
-jupyter notebook mapping_pipeline.ipynb
+streamlit run app.py
 ```
 
-### Run via CLI
+### Run via CLI (standalone)
 ```bash
 # Steps 1–3 only (no LLM, no API key needed)
-python referential_mapping/pipeline.py \
+python pipeline_standalone.py \
   --ref-a files/surveys/cis-controls-v8-1.yaml --adapter-a cis_v8 \
   --ref-b files/surveys/nistCsfV2.yaml          --adapter-b nist_csf_v2 \
   --skip-step4
 
 # Full pipeline (requires OPENAI_API_KEY)
 export OPENAI_API_KEY=sk-...
-python referential_mapping/pipeline.py \
+python pipeline_standalone.py \
   --ref-a files/surveys/cis-controls-v8-1.yaml --adapter-a cis_v8 \
   --ref-b files/surveys/nistCsfV2.yaml          --adapter-b nist_csf_v2
 ```
@@ -117,15 +119,22 @@ python referential_mapping/pipeline.py \
 --force-step4   # re-score with LLM
 ```
 
+### Available adapters
+| Name | Framework |
+|---|---|
+| `cis_v8` | CIS Controls v8 |
+| `nist_csf_v2` | NIST CSF v2 |
+| `generic` | Any other YAML in `files/surveys/` |
+
 ---
 
 ## Configuration
 
-All thresholds live in `referential_mapping/config.py`:
+All thresholds are defined at the top of `pipeline_standalone.py` (and mirrored in `referential_mapping/config.py`):
 
 | Parameter | Default | Description |
 |---|---|---|
-| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Local embedding model |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Local embedding model (no API key) |
 | `SEMANTIC_THRESHOLD` | `0.40` | Min cosine score to keep a pair (Step 2) |
 | `TOP_K` | `5` | Max candidates per requirement (Step 2) |
 | `LLM_MODEL` | `gpt-4o-mini` | LLM used for scoring (Step 4) |
@@ -137,9 +146,8 @@ All thresholds live in `referential_mapping/config.py`:
 ## Adding a new framework
 
 1. Add your YAML file to `files/surveys/`
-2. Create an adapter in `referential_mapping/ingestion/adapters/your_framework.py` — implement a `load(path) -> list[RequirementNormalized]` function
-3. Register the adapter alias in `pipeline.py` (`ADAPTER_ALIASES`)
-4. Run the pipeline pointing to your new files
+2. The `generic` adapter handles most YAML structures automatically — try it first
+3. If the structure is non-standard, add a custom `load(path)` function in `pipeline_standalone.py` and register it in `ADAPTER_LOADERS`
 
 ---
 
