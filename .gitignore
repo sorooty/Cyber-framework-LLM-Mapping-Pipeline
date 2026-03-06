@@ -2,6 +2,7 @@
 .env
 .env.*
 *.env
+.streamlit/secrets.toml
 
 # ── Instructions Copilot (confidentielles) ─────────────────────────────────
 copilot-instructions.md
