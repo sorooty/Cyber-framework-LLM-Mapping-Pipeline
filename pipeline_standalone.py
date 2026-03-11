@@ -373,7 +373,7 @@ def validate_by_yaml_name(
 # ══════════════════════════════════════════════════════════════════════════════
 
 _FRAMEWORK_METADATA: dict[str, dict] = {
-    "cis_controls_v8":     {"display_name": "CIS Controls v8",         "domain": "cybersecurity",  "language": "en"},
+    "cis_controls_v8":     {"display_name": "CIS Controls v8",         "domain": "cybersecurity",  "language": "en", "section_id_prefix": "CIS-"},
     "nistCsfV2":           {"display_name": "NIST CSF v2",              "domain": "cybersecurity",  "language": "en"},
     "nis2":                {"display_name": "NIS2",                     "domain": "cybersecurity",  "language": "fr"},
     "nis2v2":              {"display_name": "NIS2 v2",                  "domain": "cybersecurity",  "language": "fr"},
@@ -425,8 +425,9 @@ class FrameworkSchema:
     groups: dict
     flat_groups: list[str]
     overwrite_ids: dict[int, int]
-    language: str = "en"
-    domain: str   = "unknown"
+    language: str          = "en"
+    domain: str            = "unknown"
+    section_id_prefix: str = ""   # ex. "CIS-" → IDs de la forme "CIS-1.1"
 
     @property
     def total_expected(self) -> int:
@@ -496,6 +497,7 @@ def _build_schemas(survey: dict | None = None) -> dict[str, FrameworkSchema]:
             overwrite_ids=overwrite_ids,
             language=meta.get("language", "en"),
             domain=meta.get("domain", "unknown"),
+            section_id_prefix=meta.get("section_id_prefix", ""),
         )
     return schemas
 
@@ -599,6 +601,8 @@ def load_generic_yaml(path: str, framework_name: str | None = None) -> list[Requ
         section_title  = str(section.get("title",  "")).strip()
         section_prefix = str(section.get("prefix", "")).strip()
         effective_id   = str(schema.effective_section_id(section_num) if schema else section_num)
+        if schema and schema.section_id_prefix:
+            effective_id = f"{schema.section_id_prefix}{effective_id}"
         _extract_generic(
             node=section,
             framework=framework,
@@ -610,81 +614,9 @@ def load_generic_yaml(path: str, framework_name: str | None = None) -> list[Requ
     return requirements
 
 
-# ── CIS Controls v8 ───────────────────────────────────────────────────────────
-
-def load_cis_v8(path: str) -> list[RequirementNormalized]:
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    requirements = []
-    for ctrl_num, ctrl in data.items():
-        if not isinstance(ctrl, dict):
-            continue
-        safeguard_nums = sorted(
-            int(k.split("_")[0])
-            for k in ctrl
-            if k.endswith("_label") and k.split("_")[0].isdigit()
-        )
-        for n in safeguard_nums:
-            title = str(ctrl.get(f"{n}_label", "")).strip()
-            if not title:
-                continue
-            description = str(ctrl.get(f"{n}_desc", "")).strip()
-            tags_raw    = str(ctrl.get(f"{n}_tags", ""))
-            tags        = [t for t in tags_raw.strip("#").split("#") if t]
-            requirements.append(RequirementNormalized(
-                id=f"CIS-{ctrl_num}.{n}",
-                framework="CIS_v8",
-                title=title,
-                description=description,
-                tags=tags,
-            ))
-    return requirements
-
-
-# ── NIST CSF v2 ───────────────────────────────────────────────────────────────
-
-def load_nist_csf_v2(path: str) -> list[RequirementNormalized]:
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    requirements = []
-    for fn_num, fn in data.items():
-        if not isinstance(fn, dict):
-            continue
-        fn_title = fn.get("title", "")
-        cat_nums = [k for k in fn if isinstance(k, int)]
-        for cat_num in sorted(cat_nums):
-            cat = fn[cat_num]
-            if not isinstance(cat, dict):
-                continue
-            cat_prefix = cat.get("prefix", "")
-            cat_desc   = cat.get("desc", "")
-            sc_nums = sorted(
-                int(k.split("_")[0])
-                for k in cat
-                if k.endswith("_prefix") and k.split("_")[0].isdigit()
-            )
-            for n in sc_nums:
-                sc_id    = str(cat.get(f"{n}_prefix", "")).strip()
-                sc_label = str(cat.get(f"{n}_label",  "")).strip()
-                if not sc_id or not sc_label:
-                    continue
-                requirements.append(RequirementNormalized(
-                    id=sc_id,
-                    framework="NIST_CSF_v2",
-                    title=sc_label,
-                    description=cat_desc,
-                    tags=[fn_title, cat_prefix],
-                ))
-    return requirements
-
-
 # Registre des adaptateurs nommés
 ADAPTER_LOADERS: dict[str, callable] = {
-    "cis_v8":      load_cis_v8,
-    "nist_csf_v2": load_nist_csf_v2,
-    "generic":     load_generic_yaml,
+    "generic": load_generic_yaml,
 }
 
 
@@ -1357,9 +1289,9 @@ def run_cleanup(
 def main():
     parser = argparse.ArgumentParser(description="Pipeline de mapping référentiels (standalone)")
     parser.add_argument("--ref-a",         required=True, help="Chemin vers le fichier Ref A (YAML)")
-    parser.add_argument("--adapter-a",     required=True, help="Adaptateur Ref A : cis_v8 | nist_csf_v2 | generic")
+    parser.add_argument("--adapter-a",     default="generic", help="Adaptateur Ref A (seul disponible : generic)")
     parser.add_argument("--ref-b",         required=True, help="Chemin vers le fichier Ref B (YAML)")
-    parser.add_argument("--adapter-b",     required=True, help="Adaptateur Ref B : cis_v8 | nist_csf_v2 | generic")
+    parser.add_argument("--adapter-b",     default="generic", help="Adaptateur Ref B (seul disponible : generic)")
     parser.add_argument("--force-step1",   action="store_true")
     parser.add_argument("--force-step2",   action="store_true")
     parser.add_argument("--force-step4",   action="store_true")
