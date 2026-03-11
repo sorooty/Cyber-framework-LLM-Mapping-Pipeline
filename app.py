@@ -757,7 +757,7 @@ if st.session_state.results:
     # ── Tab 1 : Heatmap ───────────────────────────────────────────────────────
     with tabs[0]:
         st.subheader("Matrice de similarité sémantique")
-        st.caption("Couleur = score cosinus entre les titres. Plus c'est rouge/orange, plus les exigences sont proches sémantiquement.")
+        st.caption("Couleur = score cosinus entre les titres. Plus c'est vert, plus les exigences sont proches sémantiquement.")
         st.pyplot(r["heatmap_fig"], use_container_width=True)
 
     # ── Tab 2 : Paires candidates ─────────────────────────────────────────────
