@@ -1,13 +1,26 @@
 """
 pipeline_standalone.py — Pipeline de mapping référentiels en fichier unique.
 
-Consolide : models, config, survey_validator, schemas, adapters (cis_v8,
-nist_csf_v2, generic_yaml), ingester, similarity, heatmap, scorer, pipeline.
+Consolide : models, config, survey_validator, schemas, adaptateur générique
+unifié (plus d'adaptateur CIS/NIST spécifique), ingester, similarity (avec
+cache du modèle d'embedding au niveau module), heatmap, scorer LLM en mode
+batch (N paires par appel API), pipeline.
+
+Adaptateur unifié :
+    load_generic_yaml gère tous les référentiels (CIS, NIST, ISO…).
+    section_id_template dans FrameworkSchema applique le préfixe (ex. "CIS-1").
+
+LLM batching :
+    LLM_BATCH_SIZE paires regroupées par appel → ~200 appels → ~20 appels.
+
+Cache modèle :
+    _get_embedding_model() charge SentenceTransformer une seule fois par
+    processus (cache module-level), évitant les rechargements redondants.
 
 Usage :
     python pipeline_standalone.py \
-        --ref-a files/surveys/cis-controls-v8-1.yaml --adapter-a cis_v8 \
-        --ref-b files/surveys/nistCsfV2.yaml          --adapter-b nist_csf_v2
+        --ref-a files/surveys/cis-controls-v8-1.yaml --adapter-a generic \
+        --ref-b files/surveys/nistCsfV2.yaml          --adapter-b generic
 
 Options :
     --force-step1   Repaser les fichiers sources même si le cache existe
@@ -55,7 +68,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 SURVEY_TS_PATH = Path(__file__).parent / "files" / "survey.ts"
 
 # Étape 2 : Similarité sémantique
-EMBEDDING_MODEL    = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL    = "paraphrase-multilingual-MiniLM-L12-v2"  # multilingue FR/EN
 SEMANTIC_THRESHOLD = 0.40
 TOP_K              = 5
 
@@ -63,7 +76,15 @@ TOP_K              = 5
 LLM_MODEL             = "gpt-4o-mini"
 LLM_MAX_RETRIES       = 2
 LLM_CONFIRM_THRESHOLD = 0.75
-LLM_CONCURRENCY       = 5
+LLM_CONCURRENCY       = 20   # gpt-4o-mini tolère facilement 20 req. parallèles
+LLM_BATCH_SIZE        = 10   # paires par appel API (1 appel → N paires)
+
+# Étape 5 : Nettoyage
+LLM_MIN_CONFIDENCE = 0.40    # confiance minimale pour garder une relation
+
+# Seuils relation_type (centralisés ici, utilisés par _infer_relation_type)
+THRESHOLD_EQUIVALENCE = 0.85
+THRESHOLD_COVERAGE    = 0.75
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -127,24 +148,52 @@ class MappingRelation:
     coverage_B_to_A: float
     confidence: float
     relation_type: str  # "equivalence"|"A_couvre_B"|"B_couvre_A"|"partielle"|"aucun_lien"
+    conformity_implication: str = "none"  # "A→B" | "B→A" | "A↔B" | "none"
 
     def to_dict(self) -> dict:
         return {
-            "id_A":            self.id_A,
-            "title_A":         self.title_A,
-            "id_B":            self.id_B,
-            "title_B":         self.title_B,
-            "semantic_score":  round(self.semantic_score, 4),
-            "coverage_A_to_B": round(self.coverage_A_to_B, 4),
-            "coverage_B_to_A": round(self.coverage_B_to_A, 4),
-            "confidence":      round(self.confidence, 4),
-            "relation_type":   self.relation_type,
+            "id_A":                    self.id_A,
+            "title_A":                 self.title_A,
+            "id_B":                    self.id_B,
+            "title_B":                 self.title_B,
+            "semantic_score":          round(self.semantic_score, 4),
+            "coverage_A_to_B":         round(self.coverage_A_to_B, 4),
+            "coverage_B_to_A":         round(self.coverage_B_to_A, 4),
+            "confidence":              round(self.confidence, 4),
+            "relation_type":           self.relation_type,
+            "conformity_implication":  self.conformity_implication,
         }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Survey validator
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Helpers de classification (réutilisés partout) ────────────────────────────
+
+def _infer_relation_type(cov_a: float, cov_b: float) -> str:
+    """Dérive relation_type depuis les scores de coverage."""
+    if cov_a >= THRESHOLD_EQUIVALENCE and cov_b >= THRESHOLD_EQUIVALENCE:
+        return "equivalence"
+    if cov_a >= THRESHOLD_COVERAGE and cov_b < THRESHOLD_COVERAGE:
+        return "A_couvre_B"
+    if cov_b >= THRESHOLD_COVERAGE and cov_a < THRESHOLD_COVERAGE:
+        return "B_couvre_A"
+    if cov_a >= 0.4 or cov_b >= 0.4:
+        return "partielle"
+    return "aucun_lien"
+
+
+def _infer_conformity_implication(cov_a: float, cov_b: float) -> str:
+    """Retourne l'implication de conformité : si conforme A → conforme B automatiquement."""
+    a_implies_b = cov_a >= THRESHOLD_EQUIVALENCE
+    b_implies_a = cov_b >= THRESHOLD_EQUIVALENCE
+    if a_implies_b and b_implies_a:
+        return "A↔B"
+    if a_implies_b:
+        return "A→B"
+    if b_implies_a:
+        return "B→A"
+    return "none"
+
+
+
 
 def _parse_survey_ts(path: Path = SURVEY_TS_PATH) -> dict:
     src = path.read_text(encoding="utf-8")
@@ -776,19 +825,42 @@ CACHE_PAIRS  = DATA_DIR / "candidate_pairs.json"
 CACHE_MATRIX = DATA_DIR / "similarity_matrix.npy"
 
 
+def _cache_slug(fw_a: str, fw_b: str) -> str:
+    """Génère un slug stable pour nommer les caches par paire de frameworks."""
+    import re as _re
+    def slug(s: str) -> str:
+        return _re.sub(r"[^a-z0-9]", "_", s.lower())[:30]
+    return f"{slug(fw_a)}__{slug(fw_b)}"
+
+
+def _get_embedding_model() -> SentenceTransformer:
+    if not hasattr(_get_embedding_model, "_model"):
+        _get_embedding_model._model = SentenceTransformer(EMBEDDING_MODEL)
+    return _get_embedding_model._model
+
+
+def _req_text(r: RequirementNormalized) -> str:
+    """Texte pour l'embedding : titre + début de description si disponible."""
+    if r.description:
+        return f"{r.title}. {r.description[:200]}"
+    return r.title
+
+
 def _select_pairs(
     ref_A: list[RequirementNormalized],
     ref_B: list[RequirementNormalized],
     matrix: np.ndarray,
+    semantic_threshold: float = SEMANTIC_THRESHOLD,
+    top_k: int = TOP_K,
 ) -> list[CandidatePair]:
     pairs = []
     seen  = set()
     for i, req_a in enumerate(ref_A):
         scores      = matrix[i]
-        top_indices = np.argsort(scores)[::-1][:TOP_K]
+        top_indices = np.argsort(scores)[::-1][:top_k]
         for j in top_indices:
             score = float(scores[j])
-            if score < SEMANTIC_THRESHOLD:
+            if score < semantic_threshold:
                 break
             key = (req_a.id, ref_B[j].id)
             if key not in seen:
@@ -804,49 +876,58 @@ def _select_pairs(
     return pairs
 
 
-def _save_pairs(pairs: list[CandidatePair]) -> None:
-    CACHE_PAIRS.parent.mkdir(parents=True, exist_ok=True)
-    with open(CACHE_PAIRS, "w", encoding="utf-8") as f:
+def _save_pairs(pairs: list[CandidatePair], path: Path | None = None) -> None:
+    out = path or CACHE_PAIRS
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
         json.dump([p.to_dict() for p in pairs], f, ensure_ascii=False, indent=2)
 
 
-def _load_pairs() -> list[CandidatePair]:
-    with open(CACHE_PAIRS, "r", encoding="utf-8") as f:
+def _load_pairs(path: Path | None = None) -> list[CandidatePair]:
+    src = path or CACHE_PAIRS
+    with open(src, "r", encoding="utf-8") as f:
         return [CandidatePair(**d) for d in json.load(f)]
+
 
 
 def run_similarity(
     ref_A: list[RequirementNormalized],
     ref_B: list[RequirementNormalized],
     force: bool = False,
+    semantic_threshold: float = SEMANTIC_THRESHOLD,
+    top_k: int = TOP_K,
+    fw_a_name: str = "",
+    fw_b_name: str = "",
 ) -> tuple[list[CandidatePair], np.ndarray]:
-    if CACHE_PAIRS.exists() and CACHE_MATRIX.exists() and not force:
+    slug = _cache_slug(fw_a_name or "refA", fw_b_name or "refB")
+    cache_pairs  = DATA_DIR / f"candidate_pairs_{slug}.json"
+    cache_matrix = DATA_DIR / f"similarity_matrix_{slug}.npy"
+
+    if cache_pairs.exists() and cache_matrix.exists() and not force:
         print("[Étape 2] Cache trouvé — rechargement des paires candidates.")
-        pairs  = _load_pairs()
-        matrix = np.load(str(CACHE_MATRIX))
+        pairs  = _load_pairs(cache_pairs)
+        matrix = np.load(str(cache_matrix))
         print(f"  {len(pairs)} paires candidates chargées depuis le cache.")
         return pairs, matrix
 
-    print(f"[Étape 2] Encodage de {len(ref_A)} + {len(ref_B)} titres avec '{EMBEDDING_MODEL}' ...")
-    model = SentenceTransformer(EMBEDDING_MODEL)
+    print(f"[Étape 2] Encodage de {len(ref_A)} + {len(ref_B)} textes avec '{EMBEDDING_MODEL}' ...")
+    model = _get_embedding_model()
 
-    emb_A = model.encode([r.title for r in ref_A], show_progress_bar=True, convert_to_numpy=True)
-    emb_B = model.encode([r.title for r in ref_B], show_progress_bar=True, convert_to_numpy=True)
+    emb_A = model.encode([_req_text(r) for r in ref_A], show_progress_bar=True, convert_to_numpy=True)
+    emb_B = model.encode([_req_text(r) for r in ref_B], show_progress_bar=True, convert_to_numpy=True)
 
     emb_A = emb_A / np.linalg.norm(emb_A, axis=1, keepdims=True)
     emb_B = emb_B / np.linalg.norm(emb_B, axis=1, keepdims=True)
 
     matrix = emb_A @ emb_B.T
-    pairs  = _select_pairs(ref_A, ref_B, matrix)
+    pairs  = _select_pairs(ref_A, ref_B, matrix, semantic_threshold, top_k)
 
-    np.save(str(CACHE_MATRIX), matrix)
-    _save_pairs(pairs)
+    np.save(str(cache_matrix), matrix)
+    _save_pairs(pairs, cache_pairs)
 
-    print(f"  {len(pairs)} paires candidates retenues (seuil={SEMANTIC_THRESHOLD}, top_k={TOP_K}).")
-    print(
-        f"  Réduction : {len(ref_A) * len(ref_B)} combinaisons → {len(pairs)} paires "
-        f"({100 * len(pairs) / (len(ref_A) * len(ref_B)):.1f}%)"
-    )
+    total = len(ref_A) * len(ref_B)
+    print(f"  {len(pairs)} paires candidates retenues (seuil={semantic_threshold}, top_k={top_k}).")
+    print(f"  Réduction : {total} combinaisons → {len(pairs)} paires ({100 * len(pairs) / total:.1f}%)")
     return pairs, matrix
 
 
@@ -881,7 +962,7 @@ def run_heatmap(
         linewidths=0,
         cbar_kws={"label": "Similarité cosinus"},
     )
-    ax.set_title("Matrice de similarité sémantique — titres uniquement", fontsize=14, pad=12)
+    ax.set_title("Matrice de similarité sémantique — titre + description", fontsize=14, pad=12)
     ax.set_xlabel("Ref B", fontsize=11)
     ax.set_ylabel("Ref A", fontsize=11)
     ax.tick_params(axis="x", labelsize=6, rotation=90)
@@ -910,91 +991,180 @@ class LLMScoringOutput(BaseModel):
     relation_type:   Literal["equivalence", "A_couvre_B", "B_couvre_A", "partielle", "aucun_lien"]
 
 
-SYSTEM_PROMPT = """Tu es un expert en référentiels de cybersécurité et conformité.
-Tu dois évaluer la corrélation entre deux exigences issues de référentiels différents.
-Réponds UNIQUEMENT en JSON valide, sans commentaire, avec exactement ces clés :
-- coverage_A_to_B (float 0-1) : dans quelle mesure A couvre/satisfait B
-- coverage_B_to_A (float 0-1) : dans quelle mesure B couvre/satisfait A
-- confidence (float 0-1) : ta confiance dans cette évaluation
-- relation_type : exactement l'une de ces valeurs :
-  "equivalence" | "A_couvre_B" | "B_couvre_A" | "partielle" | "aucun_lien"
-
-Règles pour relation_type :
-- equivalence  : coverage_A_to_B >= 0.8 ET coverage_B_to_A >= 0.8
-- A_couvre_B   : coverage_A_to_B >= 0.8 ET coverage_B_to_A < 0.8
-- B_couvre_A   : coverage_B_to_A >= 0.8 ET coverage_A_to_B < 0.8
-- partielle    : coverage_A_to_B >= 0.4 OU coverage_B_to_A >= 0.4
-- aucun_lien   : sinon"""
+class LLMBatchOutput(BaseModel):
+    results: list[LLMScoringOutput]
 
 
-def _make_user_prompt(req_a: RequirementNormalized, req_b: RequirementNormalized) -> str:
+SYSTEM_PROMPT = f"""Tu es un expert en mapping de référentiels de cybersécurité et conformité (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
+
+Ta mission : évaluer la relation entre deux exigences de sécurité/conformité.
+
+## Définitions
+
+**coverage_A_to_B** (float 0.0–1.0) : proportion des objectifs de sécurité de B qui sont couverts ou satisfaits par A.
+- 1.0 = A adresse entièrement tous les objectifs de B
+- 0.8 = A couvre la majorité des objectifs de B, quelques lacunes mineures
+- 0.5 = A couvre environ la moitié des objectifs de B
+- 0.2 = A effleure le sujet de B mais ne le couvre pas vraiment
+- 0.0 = aucun rapport
+
+**coverage_B_to_A** : idem mais dans le sens B→A.
+
+**confidence** : ta certitude dans cette évaluation (0=incertain, 1=très certain).
+
+## Règles de classification relation_type
+
+| Condition | relation_type |
+|-----------|--------------|
+| coverage_A_to_B >= {THRESHOLD_EQUIVALENCE} ET coverage_B_to_A >= {THRESHOLD_EQUIVALENCE} | "equivalence" |
+| coverage_A_to_B >= {THRESHOLD_COVERAGE} ET coverage_B_to_A < {THRESHOLD_COVERAGE} | "A_couvre_B" |
+| coverage_B_to_A >= {THRESHOLD_COVERAGE} ET coverage_A_to_B < {THRESHOLD_COVERAGE} | "B_couvre_A" |
+| max(coverage_A_to_B, coverage_B_to_A) >= 0.4 | "partielle" |
+| sinon | "aucun_lien" |
+
+## Cas particuliers
+
+- Si les deux exigences sont **quasi-identiques** (même titre, même sujet) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95.
+- Si les référentiels sont **identiques** (même framework A et B) → traite chaque paire sur son mérite réel.
+- Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont proches sémantiquement.
+
+## Format de réponse
+
+Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown."""
+
+
+SYSTEM_PROMPT_BATCH = SYSTEM_PROMPT + """
+
+Tu reçois une liste numérotée de paires d'exigences.
+Réponds avec un JSON contenant exactement :
+{"results": [<scoring_paire_1>, <scoring_paire_2>, ...]}
+
+Chaque scoring_paire_i contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type.
+Le nombre d'éléments dans "results" doit correspondre exactement au nombre de paires reçues."""
+
+
+def _make_pair_text(idx: int, req_a: RequirementNormalized, req_b: RequirementNormalized) -> str:
+    tags_a = f" [{', '.join(req_a.tags[:3])}]" if req_a.tags else ""
+    tags_b = f" [{', '.join(req_b.tags[:3])}]" if req_b.tags else ""
+    desc_a = (req_a.description[:300] + "…") if len(req_a.description) > 300 else req_a.description
+    desc_b = (req_b.description[:300] + "…") if len(req_b.description) > 300 else req_b.description
     return (
-        f"Exigence A ({req_a.framework}) :\n"
-        f"Titre : {req_a.title}\n"
-        f"Description : {req_a.description or '(non disponible)'}\n\n"
-        f"Exigence B ({req_b.framework}) :\n"
-        f"Titre : {req_b.title}\n"
-        f"Description : {req_b.description or '(non disponible)'}\n\n"
-        f"Évalue la corrélation entre ces deux exigences."
+        f"--- Paire {idx} ---\n"
+        f"A ({req_a.framework}{tags_a}) : {req_a.title}\n"
+        f"{desc_a or '(description non disponible)'}\n\n"
+        f"B ({req_b.framework}{tags_b}) : {req_b.title}\n"
+        f"{desc_b or '(description non disponible)'}"
     )
 
 
-async def _score_pair(
+def _make_user_prompt(req_a: RequirementNormalized, req_b: RequirementNormalized) -> str:
+    return _make_pair_text(1, req_a, req_b) + "\n\nÉvalue la corrélation."
+
+
+def _make_batch_prompt(pairs: list[tuple[RequirementNormalized, RequirementNormalized]]) -> str:
+    blocks = [_make_pair_text(i + 1, a, b) for i, (a, b) in enumerate(pairs)]
+    return "\n\n".join(blocks) + f"\n\nÉvalue les {len(pairs)} paires ci-dessus."
+
+
+async def _score_batch(
     client: AsyncOpenAI,
     semaphore: asyncio.Semaphore,
-    req_a: RequirementNormalized,
-    req_b: RequirementNormalized,
-) -> LLMScoringOutput | None:
+    pairs: list[tuple[RequirementNormalized, RequirementNormalized]],
+    llm_model: str,
+) -> list[LLMScoringOutput | None]:
+    """Score un batch de paires en un seul appel API. Fallback 1-par-1 si parse échoue."""
+    if not pairs:
+        return []
+
+    system = SYSTEM_PROMPT_BATCH if len(pairs) > 1 else SYSTEM_PROMPT
+    user   = _make_batch_prompt(pairs) if len(pairs) > 1 else _make_user_prompt(pairs[0][0], pairs[0][1])
+
     async with semaphore:
         for attempt in range(LLM_MAX_RETRIES + 1):
             try:
                 response = await client.chat.completions.create(
-                    model=LLM_MODEL,
+                    model=llm_model,
                     response_format={"type": "json_object"},
                     messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user",   "content": _make_user_prompt(req_a, req_b)},
+                        {"role": "system", "content": system},
+                        {"role": "user",   "content": user},
                     ],
                     temperature=0.0,
                 )
                 raw = response.choices[0].message.content
-                return LLMScoringOutput.model_validate_json(raw)
-            except (ValidationError, json.JSONDecodeError, Exception) as e:
+
+                if len(pairs) == 1:
+                    result = LLMScoringOutput.model_validate_json(raw)
+                    return [result]
+
+                batch_out = LLMBatchOutput.model_validate_json(raw)
+                if len(batch_out.results) != len(pairs):
+                    raise ValueError(
+                        f"Batch: attendu {len(pairs)} résultats, reçu {len(batch_out.results)}"
+                    )
+                return batch_out.results
+
+            except Exception as e:
                 if attempt == LLM_MAX_RETRIES:
-                    print(f"  [LLM ERREUR] {req_a.id}↔{req_b.id} : {e}")
-                    return None
-    return None
+                    if len(pairs) > 1:
+                        # Fallback : scorer 1 par 1
+                        print(f"  [LLM BATCH FALLBACK] {len(pairs)} paires → 1-par-1 ({e})")
+                        results = []
+                        for a, b in pairs:
+                            r = await _score_batch(client, semaphore, [(a, b)], llm_model)
+                            results.append(r[0] if r else None)
+                        return results
+                    else:
+                        print(f"  [LLM ERREUR] {pairs[0][0].id}↔{pairs[0][1].id} : {e}")
+                        return [None]
+    return [None] * len(pairs)
 
 
 async def _run_scorer_async(
     candidates: list[CandidatePair],
     ref_A_map: dict[str, RequirementNormalized],
     ref_B_map: dict[str, RequirementNormalized],
+    llm_model: str,
+    batch_size: int,
 ) -> list[MappingRelation]:
     client    = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
     semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
 
-    tasks = [
-        _score_pair(client, semaphore, ref_A_map[p.id_A], ref_B_map[p.id_B])
-        for p in candidates
+    # Découper les candidats en batches
+    pair_objects = [(ref_A_map[p.id_A], ref_B_map[p.id_B]) for p in candidates]
+    batches      = [pair_objects[i:i + batch_size] for i in range(0, len(pair_objects), batch_size)]
+    cand_batches = [candidates[i:i + batch_size]   for i in range(0, len(candidates),   batch_size)]
+
+    n_calls = len(batches)
+    print(
+        f"[Étape 4] Scoring LLM sur {len(candidates)} paires "
+        f"({n_calls} appels API, batch_size={batch_size}) ..."
+    )
+
+    batch_tasks = [
+        _score_batch(client, semaphore, batch, llm_model)
+        for batch in batches
     ]
+    batch_results = await asyncio.gather(*batch_tasks)
 
-    print(f"[Étape 4] Scoring LLM sur {len(candidates)} paires candidates ...")
-    results = await asyncio.gather(*tasks)
-
+    # Aplatir résultats
     relations: list[MappingRelation] = []
-    for pair, result in zip(candidates, results):
-        if result is None:
-            continue
-        relations.append(MappingRelation(
-            id_A=pair.id_A, title_A=pair.title_A,
-            id_B=pair.id_B, title_B=pair.title_B,
-            semantic_score=pair.semantic_score,
-            coverage_A_to_B=result.coverage_A_to_B,
-            coverage_B_to_A=result.coverage_B_to_A,
-            confidence=result.confidence,
-            relation_type=result.relation_type,
-        ))
+    for cand_batch, results in zip(cand_batches, batch_results):
+        for pair, result in zip(cand_batch, results):
+            if result is None:
+                continue
+            cov_a = result.coverage_A_to_B
+            cov_b = result.coverage_B_to_A
+            relations.append(MappingRelation(
+                id_A=pair.id_A, title_A=pair.title_A,
+                id_B=pair.id_B, title_B=pair.title_B,
+                semantic_score=pair.semantic_score,
+                coverage_A_to_B=cov_a,
+                coverage_B_to_A=cov_b,
+                confidence=result.confidence,
+                relation_type=_infer_relation_type(cov_a, cov_b),
+                conformity_implication=_infer_conformity_implication(cov_a, cov_b),
+            ))
 
     # Double vérification sur les paires à fort score
     high_score = [
@@ -1003,21 +1173,33 @@ async def _run_scorer_async(
     ]
     if high_score:
         print(f"  Double vérification sur {len(high_score)} paires à fort score ...")
-        confirm_tasks   = [_score_pair(client, semaphore, ref_A_map[r.id_A], ref_B_map[r.id_B]) for r in high_score]
-        confirm_results = await asyncio.gather(*confirm_tasks)
-        confirmed_map   = {(r.id_A, r.id_B): r for r in high_score}
+        confirm_pairs   = [(ref_A_map[r.id_A], ref_B_map[r.id_B]) for r in high_score]
+        confirm_batches = [confirm_pairs[i:i + batch_size] for i in range(0, len(confirm_pairs), batch_size)]
+        confirm_tasks   = [_score_batch(client, semaphore, b, llm_model) for b in confirm_batches]
+        confirm_results_nested = await asyncio.gather(*confirm_tasks)
+        confirm_results = [r for batch in confirm_results_nested for r in batch]
+
+        confirmed_map = {(r.id_A, r.id_B): r for r in high_score}
         for rel, confirm in zip(high_score, confirm_results):
             if confirm is None:
                 continue
             orig = confirmed_map[(rel.id_A, rel.id_B)]
-            orig.coverage_A_to_B = round((orig.coverage_A_to_B + confirm.coverage_A_to_B) / 2, 4)
-            orig.coverage_B_to_A = round((orig.coverage_B_to_A + confirm.coverage_B_to_A) / 2, 4)
-            orig.confidence       = round((orig.confidence + confirm.confidence) / 2, 4)
+            cov_a = round((orig.coverage_A_to_B + confirm.coverage_A_to_B) / 2, 4)
+            cov_b = round((orig.coverage_B_to_A + confirm.coverage_B_to_A) / 2, 4)
+            orig.coverage_A_to_B        = cov_a
+            orig.coverage_B_to_A        = cov_b
+            orig.confidence             = round((orig.confidence + confirm.confidence) / 2, 4)
+            orig.relation_type          = _infer_relation_type(cov_a, cov_b)
+            orig.conformity_implication = _infer_conformity_implication(cov_a, cov_b)
 
     return relations
 
 
-def _export_results(relations: list[MappingRelation]) -> None:
+def _export_results(
+    relations: list[MappingRelation],
+    removed: list[MappingRelation] | None = None,
+    xlsx_path: Path | None = None,
+) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with open(CACHE_RELATIONS, "w", encoding="utf-8") as f:
@@ -1036,7 +1218,7 @@ def _export_results(relations: list[MappingRelation]) -> None:
         headers = [
             "ID Ref A", "Titre Ref A", "ID Ref B", "Titre Ref B",
             "Score sémantique", "Coverage A→B", "Coverage B→A",
-            "Confiance", "Type de relation",
+            "Confiance", "Type de relation", "Implication conformité",
         ]
         header_fill = PatternFill("solid", fgColor="1F4E79")
         header_font = Font(bold=True, color="FFFFFF")
@@ -1057,15 +1239,21 @@ def _export_results(relations: list[MappingRelation]) -> None:
             "partielle":   "FFDDC1",
             "aucun_lien":  "FFC7CE",
         }
+        IMPLICATION_COLORS = {
+            "A↔B": "C6EFCE",
+            "A→B": "DDEBF7",
+            "B→A": "FCE4D6",
+            "none": "F2F2F2",
+        }
 
         for row_idx, r in enumerate(relations, 2):
             values = [
                 r.id_A, r.title_A, r.id_B, r.title_B,
                 r.semantic_score, r.coverage_A_to_B, r.coverage_B_to_A,
-                r.confidence, r.relation_type,
+                r.confidence, r.relation_type, r.conformity_implication,
             ]
-            fill_color = RELATION_COLORS.get(r.relation_type, "FFFFFF")
-            fill = PatternFill("solid", fgColor=fill_color)
+            row_fill = PatternFill("solid", fgColor=RELATION_COLORS.get(r.relation_type, "FFFFFF"))
+            impl_fill = PatternFill("solid", fgColor=IMPLICATION_COLORS.get(r.conformity_implication, "F2F2F2"))
             for col_idx, val in enumerate(values, 1):
                 cell = ws.cell(row=row_idx, column=col_idx, value=val)
                 cell.border    = border
@@ -1073,18 +1261,40 @@ def _export_results(relations: list[MappingRelation]) -> None:
                 if col_idx in (5, 6, 7, 8):
                     cell.number_format = "0.00"
                 if col_idx == 9:
-                    cell.fill = fill
+                    cell.fill = row_fill
+                elif col_idx == 10:
+                    cell.fill = impl_fill
 
-        col_widths = [12, 50, 16, 50, 12, 12, 12, 10, 18]
+        col_widths = [12, 50, 16, 50, 12, 12, 12, 10, 18, 20]
         for i, w in enumerate(col_widths, 1):
             ws.column_dimensions[get_column_letter(i)].width = w
 
-        ws.freeze_panes       = "A2"
-        ws.auto_filter.ref    = ws.dimensions
+        ws.freeze_panes    = "A2"
+        ws.auto_filter.ref = ws.dimensions
 
-        xlsx_path = OUTPUT_DIR / "mapping_results.xlsx"
-        wb.save(str(xlsx_path))
-        print(f"  → {xlsx_path}")
+        # Feuille "Supprimées" (aucun_lien filtrés)
+        if removed:
+            ws2 = wb.create_sheet("Supprimées")
+            for col, h in enumerate(headers, 1):
+                cell = ws2.cell(row=1, column=col, value=h)
+                cell.fill = PatternFill("solid", fgColor="808080")
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.border = border
+            for row_idx, r in enumerate(removed, 2):
+                values = [
+                    r.id_A, r.title_A, r.id_B, r.title_B,
+                    r.semantic_score, r.coverage_A_to_B, r.coverage_B_to_A,
+                    r.confidence, r.relation_type, r.conformity_implication,
+                ]
+                for col_idx, val in enumerate(values, 1):
+                    cell = ws2.cell(row=row_idx, column=col_idx, value=val)
+                    cell.border = border
+                    if col_idx in (5, 6, 7, 8):
+                        cell.number_format = "0.00"
+
+        out = xlsx_path or OUTPUT_DIR / "mapping_results.xlsx"
+        wb.save(str(out))
+        print(f"  → {out}")
 
     except Exception as e:
         print(f"  [WARN] Export Excel échoué : {e}")
@@ -1095,19 +1305,28 @@ def run_scorer(
     ref_A: list[RequirementNormalized],
     ref_B: list[RequirementNormalized],
     force: bool = False,
+    llm_model: str = LLM_MODEL,
+    batch_size: int = LLM_BATCH_SIZE,
+    cache_path: Path | None = None,
 ) -> list[MappingRelation]:
-    if CACHE_RELATIONS.exists() and not force:
+    _cache = cache_path or CACHE_RELATIONS
+    if _cache.exists() and not force:
         print("[Étape 4] Cache trouvé — rechargement des relations.")
-        with open(CACHE_RELATIONS, "r", encoding="utf-8") as f:
+        with open(_cache, "r", encoding="utf-8") as f:
             data = json.load(f)
-        relations = [MappingRelation(**d) for d in data]
+        relations = [
+            MappingRelation(**{k: v for k, v in d.items() if k in MappingRelation.__dataclass_fields__})
+            for d in data
+        ]
         print(f"  {len(relations)} relations chargées depuis le cache.")
         return relations
 
     ref_A_map = {r.id: r for r in ref_A}
     ref_B_map = {r.id: r for r in ref_B}
 
-    relations = asyncio.run(_run_scorer_async(candidates, ref_A_map, ref_B_map))
+    relations = asyncio.run(
+        _run_scorer_async(candidates, ref_A_map, ref_B_map, llm_model, batch_size)
+    )
 
     print(f"\n[Diagnostic étape 4]")
     print(f"  Paires scorées : {len(relations)}")
@@ -1115,8 +1334,39 @@ def run_scorer(
         n = sum(1 for r in relations if r.relation_type == rt)
         print(f"  {rt:20s} : {n}")
 
-    _export_results(relations)
+    # Sauvegarder dans le bon cache
+    _cache.parent.mkdir(parents=True, exist_ok=True)
+    with open(_cache, "w", encoding="utf-8") as f:
+        json.dump([r.to_dict() for r in relations], f, ensure_ascii=False, indent=2)
+
     return relations
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Étape 5 — Nettoyage des liaisons inutiles
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_cleanup(
+    relations: list[MappingRelation],
+    min_confidence: float = LLM_MIN_CONFIDENCE,
+) -> tuple[list[MappingRelation], list[MappingRelation]]:
+    """
+    Filtre les relations sans valeur :
+    - relation_type == "aucun_lien"
+    - confidence < min_confidence
+
+    Retourne (relations_utiles, relations_supprimées).
+    """
+    clean, removed = [], []
+    for r in relations:
+        if r.relation_type == "aucun_lien" or r.confidence < min_confidence:
+            removed.append(r)
+        else:
+            clean.append(r)
+
+    print(f"[Étape 5] Nettoyage : {len(clean)} relations conservées, {len(removed)} supprimées "
+          f"(aucun_lien ou confiance < {min_confidence:.2f})")
+    return clean, removed
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1125,14 +1375,17 @@ def run_scorer(
 
 def main():
     parser = argparse.ArgumentParser(description="Pipeline de mapping référentiels (standalone)")
-    parser.add_argument("--ref-a",       required=True, help="Chemin vers le fichier Ref A (YAML)")
-    parser.add_argument("--adapter-a",   required=True, help="Adaptateur Ref A : cis_v8 | nist_csf_v2 | generic")
-    parser.add_argument("--ref-b",       required=True, help="Chemin vers le fichier Ref B (YAML)")
-    parser.add_argument("--adapter-b",   required=True, help="Adaptateur Ref B : cis_v8 | nist_csf_v2 | generic")
-    parser.add_argument("--force-step1", action="store_true")
-    parser.add_argument("--force-step2", action="store_true")
-    parser.add_argument("--force-step4", action="store_true")
-    parser.add_argument("--skip-step4",  action="store_true", help="Arrêter après l'étape 3")
+    parser.add_argument("--ref-a",         required=True, help="Chemin vers le fichier Ref A (YAML)")
+    parser.add_argument("--adapter-a",     required=True, help="Adaptateur Ref A : cis_v8 | nist_csf_v2 | generic")
+    parser.add_argument("--ref-b",         required=True, help="Chemin vers le fichier Ref B (YAML)")
+    parser.add_argument("--adapter-b",     required=True, help="Adaptateur Ref B : cis_v8 | nist_csf_v2 | generic")
+    parser.add_argument("--force-step1",   action="store_true")
+    parser.add_argument("--force-step2",   action="store_true")
+    parser.add_argument("--force-step4",   action="store_true")
+    parser.add_argument("--skip-step4",    action="store_true", help="Arrêter après l'étape 3")
+    parser.add_argument("--skip-step5",    action="store_true", help="Ne pas filtrer les aucun_lien")
+    parser.add_argument("--min-confidence", type=float, default=LLM_MIN_CONFIDENCE,
+                        help=f"Confiance minimale pour conserver une relation (défaut: {LLM_MIN_CONFIDENCE})")
     args = parser.parse_args()
 
     loader_a = ADAPTER_LOADERS.get(args.adapter_a)
@@ -1142,6 +1395,10 @@ def main():
     if loader_b is None:
         sys.exit(f"Adaptateur inconnu : {args.adapter_b!r}. Disponibles : {list(ADAPTER_LOADERS)}")
 
+    fw_a = Path(args.ref_a).stem
+    fw_b = Path(args.ref_b).stem
+    slug = _cache_slug(fw_a, fw_b)
+
     # ── Étape 1 ──────────────────────────────────────────────────────────────
     ref_A, ref_B = run_ingestion(
         path_A=args.ref_a, loader_A=loader_a,
@@ -1150,7 +1407,11 @@ def main():
     )
 
     # ── Étape 2 ──────────────────────────────────────────────────────────────
-    candidates, matrix = run_similarity(ref_A, ref_B, force=args.force_step2)
+    candidates, matrix = run_similarity(
+        ref_A, ref_B,
+        force=args.force_step2,
+        fw_a_name=fw_a, fw_b_name=fw_b,
+    )
 
     # ── Étape 3 ──────────────────────────────────────────────────────────────
     run_heatmap(ref_A, ref_B, matrix, show=False)
@@ -1160,9 +1421,24 @@ def main():
         return
 
     # ── Étape 4 ──────────────────────────────────────────────────────────────
-    relations = run_scorer(candidates, ref_A, ref_B, force=args.force_step4)
+    cache_rel = OUTPUT_DIR / f"mapping_relations_{slug}.json"
+    relations = run_scorer(
+        candidates, ref_A, ref_B,
+        force=args.force_step4,
+        cache_path=cache_rel,
+    )
 
-    print(f"\n[Pipeline] Terminé — {len(relations)} relations exportées.")
+    # ── Étape 5 ──────────────────────────────────────────────────────────────
+    if not args.skip_step5:
+        relations, removed = run_cleanup(relations, min_confidence=args.min_confidence)
+        xlsx_out = OUTPUT_DIR / f"mapping_results_{slug}.xlsx"
+        _export_results(relations, removed=removed, xlsx_path=xlsx_out)
+    else:
+        xlsx_out = OUTPUT_DIR / f"mapping_results_{slug}.xlsx"
+        _export_results(relations, xlsx_path=xlsx_out)
+        removed = []
+
+    print(f"\n[Pipeline] Terminé — {len(relations)} relations exportées ({len(removed)} supprimées).")
 
 
 if __name__ == "__main__":

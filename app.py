@@ -41,8 +41,9 @@ plt.rcParams.update(_MPLRC_DARK)   # défaut dark ; mis à jour en runtime si li
 import pipeline_standalone as ps
 from pipeline_standalone import (
     list_frameworks, load_framework, get_expected_count,
-    _select_pairs,
+    run_similarity, run_scorer, run_cleanup, _export_results,
     EMBEDDING_MODEL, SEMANTIC_THRESHOLD, TOP_K, LLM_MODEL,
+    LLM_MIN_CONFIDENCE, LLM_BATCH_SIZE,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -586,9 +587,14 @@ with st.sidebar:
         )
         llm_model = st.selectbox("Modèle", ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
                                   index=0)
+        min_conf  = st.slider("Confiance minimale (étape 5)", 0.0, 1.0, LLM_MIN_CONFIDENCE, 0.05,
+                              help="Relations avec confiance < seuil seront supprimées à l'étape 5")
+        skip_cleanup = st.checkbox("Désactiver étape 5 (garder aucun_lien)", value=False)
     else:
-        api_key = ""
-        llm_model = LLM_MODEL
+        api_key      = ""
+        llm_model    = LLM_MODEL
+        min_conf     = LLM_MIN_CONFIDENCE
+        skip_cleanup = False
 
     st.divider()
     run_btn = st.button("🚀 Lancer le pipeline", type="primary", use_container_width=True)
@@ -645,19 +651,14 @@ if run_btn:
     # ── Étape 2 ──────────────────────────────────────────────────────────────
     with st.status("**Étape 2** — Similarité sémantique (embeddings) ...", expanded=True) as s:
         t0 = time.time()
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(EMBEDDING_MODEL)
-        emb_A = model.encode([r.title for r in ref_A], show_progress_bar=False, convert_to_numpy=True)
-        emb_B = model.encode([r.title for r in ref_B], show_progress_bar=False, convert_to_numpy=True)
-        emb_A = emb_A / np.linalg.norm(emb_A, axis=1, keepdims=True)
-        emb_B = emb_B / np.linalg.norm(emb_B, axis=1, keepdims=True)
-        matrix = emb_A @ emb_B.T
-
-        # Override config seuil/top_k avec les sliders UI
-        ps.SEMANTIC_THRESHOLD = sem_thresh
-        ps.TOP_K = top_k
-        candidates = _select_pairs(ref_A, ref_B, matrix)
-
+        candidates, matrix = run_similarity(
+            ref_A, ref_B,
+            force=True,
+            semantic_threshold=sem_thresh,
+            top_k=top_k,
+            fw_a_name=ref_a_name,
+            fw_b_name=ref_b_name,
+        )
         total_combinations = len(ref_A) * len(ref_B)
         pct = 100 * len(candidates) / total_combinations
         s.update(label=f"✅ Étape 2 — {len(candidates)} paires ({pct:.1f}% de {total_combinations}) en {time.time()-t0:.1f}s")
@@ -690,18 +691,32 @@ if run_btn:
 
     # ── Étape 4 (optionnel) ───────────────────────────────────────────────────
     relations = None
+    removed   = []
     if run_llm and api_key:
         with st.status("**Étape 4** — Scoring LLM ...", expanded=True) as s:
             t0 = time.time()
             os.environ["OPENAI_API_KEY"] = api_key
-            ps.LLM_MODEL = llm_model
-            # On ne cache pas ici (demo), on force toujours
-            relations = ps.run_scorer(candidates, ref_A, ref_B, force=True)
+            relations = run_scorer(
+                candidates, ref_A, ref_B,
+                force=True,
+                llm_model=llm_model,
+                batch_size=LLM_BATCH_SIZE,
+            )
             s.update(label=f"✅ Étape 4 — {len(relations)} relations scorées en {time.time()-t0:.1f}s")
+
+        # ── Étape 5 — Nettoyage ──────────────────────────────────────────────
+        if not skip_cleanup:
+            with st.status("**Étape 5** — Nettoyage des liaisons inutiles ...", expanded=True) as s:
+                relations, removed = run_cleanup(relations, min_confidence=min_conf)
+                s.update(
+                    label=(f"✅ Étape 5 — {len(relations)} relations conservées, "
+                           f"{len(removed)} supprimées (aucun_lien / conf < {min_conf:.2f})")
+                )
     elif run_llm and not api_key:
         st.error("❌ Clé OpenAI manquante.")
 
     results["relations"] = relations
+    results["removed"]   = removed
     st.session_state.results = results
     st.success("✅ Pipeline terminé !")
 
@@ -714,6 +729,7 @@ if st.session_state.results:
     matrix     = r["matrix"]
     candidates = r["candidates"]
     relations  = r["relations"]
+    removed    = r.get("removed", [])
 
     # ── Métriques ─────────────────────────────────────────────────────────────
     total_comb = len(ref_A) * len(ref_B)
@@ -728,8 +744,8 @@ if st.session_state.results:
         st.metric("🔗 Paires candidates", len(candidates), delta=f"{pct:.1f}% des {total_comb}")
     with col4:
         if relations:
-            significant = sum(1 for r2 in relations if r2.relation_type != "aucun_lien")
-            st.metric("✅ Relations confirmées", significant)
+            st.metric("✅ Relations conservées", len(relations),
+                      delta=f"-{len(removed)} supprimées" if removed else None)
         else:
             st.metric("💡 LLM", "Non lancé")
 
@@ -792,49 +808,67 @@ if st.session_state.results:
                 "equivalence": "🟢", "A_couvre_B": "🟡",
                 "B_couvre_A": "🟠", "partielle": "🔵", "aucun_lien": "⚫",
             }
+            IMPL_ICONS = {"A↔B": "🔄", "A→B": "➡️", "B→A": "⬅️", "none": "—"}
 
             # Filtre
-            col_r1, col_r2 = st.columns(2)
+            col_r1, col_r2, col_r3 = st.columns(3)
             with col_r1:
                 rt_filter = st.multiselect(
                     "Type de relation",
                     options=df_r["relation_type"].unique().tolist(),
-                    default=[t for t in df_r["relation_type"].unique() if t != "aucun_lien"],
+                    default=df_r["relation_type"].unique().tolist(),
                 )
             with col_r2:
-                conf_min = st.slider("Confiance min", 0.0, 1.0, 0.5, 0.05)
+                conf_min = st.slider("Confiance min", 0.0, 1.0, 0.0, 0.05)
+            with col_r3:
+                impl_filter = st.multiselect(
+                    "Implication conformité",
+                    options=df_r["conformity_implication"].unique().tolist() if "conformity_implication" in df_r.columns else [],
+                    default=df_r["conformity_implication"].unique().tolist() if "conformity_implication" in df_r.columns else [],
+                )
 
-            df_show = df_r[
-                df_r["relation_type"].isin(rt_filter) &
-                (df_r["confidence"] >= conf_min)
-            ].sort_values("confidence", ascending=False)
+            mask = df_r["relation_type"].isin(rt_filter) & (df_r["confidence"] >= conf_min)
+            if impl_filter and "conformity_implication" in df_r.columns:
+                mask = mask & df_r["conformity_implication"].isin(impl_filter)
+            df_show = df_r[mask].sort_values("confidence", ascending=False)
 
             st.caption(f"{len(df_show)} relations affichées")
-            st.dataframe(
-                df_show,
-                use_container_width=True,
-                column_config={
-                    "relation_type":   st.column_config.TextColumn("Type", width=120),
-                    "title_A":         st.column_config.TextColumn(f"Titre {ref_a_name}", width=280),
-                    "title_B":         st.column_config.TextColumn(f"Titre {ref_b_name}", width=280),
-                    "semantic_score":  st.column_config.ProgressColumn("Sémantique", min_value=0, max_value=1, format="%.2f"),
-                    "coverage_A_to_B": st.column_config.ProgressColumn("Cov A→B", min_value=0, max_value=1, format="%.2f"),
-                    "coverage_B_to_A": st.column_config.ProgressColumn("Cov B→A", min_value=0, max_value=1, format="%.2f"),
-                    "confidence":      st.column_config.ProgressColumn("Confiance", min_value=0, max_value=1, format="%.2f"),
-                },
-                hide_index=True,
-            )
+
+            col_config = {
+                "relation_type":          st.column_config.TextColumn("Type", width=120),
+                "conformity_implication": st.column_config.TextColumn("Implication", width=100,
+                    help="A→B : conforme A ⟹ conforme B | B→A : conforme B ⟹ conforme A | A↔B : équivalents"),
+                "title_A":                st.column_config.TextColumn(f"Titre {ref_a_name}", width=260),
+                "title_B":                st.column_config.TextColumn(f"Titre {ref_b_name}", width=260),
+                "semantic_score":         st.column_config.ProgressColumn("Sémantique", min_value=0, max_value=1, format="%.2f"),
+                "coverage_A_to_B":        st.column_config.ProgressColumn("Cov A→B", min_value=0, max_value=1, format="%.2f"),
+                "coverage_B_to_A":        st.column_config.ProgressColumn("Cov B→A", min_value=0, max_value=1, format="%.2f"),
+                "confidence":             st.column_config.ProgressColumn("Confiance", min_value=0, max_value=1, format="%.2f"),
+            }
+            st.dataframe(df_show, use_container_width=True, column_config=col_config, hide_index=True)
 
             # Répartition
-            st.subheader("Répartition des types de relation")
-            vc = df_r["relation_type"].value_counts()
-            fig_pie, ax_pie = plt.subplots(figsize=(5, 4))
-            colors_pie = _pie_colors
-            ax_pie.pie(vc.values, labels=[f"{COLORS.get(l,'')} {l}" for l in vc.index],
-                       colors=colors_pie[:len(vc)], autopct="%1.0f%%", startangle=90)
-            ax_pie.set_title("Mapping final")
-            plt.tight_layout()
-            st.pyplot(fig_pie)
+            col_pie1, col_pie2 = st.columns(2)
+            with col_pie1:
+                st.subheader("Types de relation")
+                vc = df_r["relation_type"].value_counts()
+                fig_pie, ax_pie = plt.subplots(figsize=(5, 4))
+                ax_pie.pie(vc.values, labels=[f"{COLORS.get(l,'')} {l}" for l in vc.index],
+                           colors=_pie_colors[:len(vc)], autopct="%1.0f%%", startangle=90)
+                ax_pie.set_title("Mapping final")
+                plt.tight_layout()
+                st.pyplot(fig_pie)
+            with col_pie2:
+                if "conformity_implication" in df_r.columns:
+                    st.subheader("Implications de conformité")
+                    vi = df_r["conformity_implication"].value_counts()
+                    fig_impl, ax_impl = plt.subplots(figsize=(5, 4))
+                    ax_impl.pie(vi.values,
+                                labels=[f"{IMPL_ICONS.get(l,'')} {l}" for l in vi.index],
+                                colors=_pie_colors[:len(vi)], autopct="%1.0f%%", startangle=90)
+                    ax_impl.set_title("Implication conformité")
+                    plt.tight_layout()
+                    st.pyplot(fig_impl)
 
     # ── Tab 4 : Export ────────────────────────────────────────────────────────
     with tabs[3]:
