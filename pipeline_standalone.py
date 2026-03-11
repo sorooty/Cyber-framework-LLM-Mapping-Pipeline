@@ -982,9 +982,7 @@ class LLMBatchOutput(BaseModel):
     results: list[LLMScoringOutput]
 
 
-SYSTEM_PROMPT = f"""Tu es un expert en mapping de référentiels de cybersécurité et conformité (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
-
-Ta mission : évaluer la relation entre deux exigences de sécurité/conformité.
+PROMPT_INSTRUCTIONS = f"""Tu es un expert en mapping de référentiels de cybersécurité et conformité (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
 
 ## Définitions
 
@@ -1014,22 +1012,7 @@ Ta mission : évaluer la relation entre deux exigences de sécurité/conformité
 ## Cas particuliers
 
 - Si les deux exigences sont **quasi-identiques** (même titre, même sujet) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95, justification="Les deux exigences adressent le même objectif de sécurité."
-- Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont proches sémantiquement.
-
-## Format de réponse
-
-Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown.
-Clés attendues : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."""
-
-
-SYSTEM_PROMPT_BATCH = SYSTEM_PROMPT + """
-
-Tu reçois une liste numérotée de paires d'exigences.
-Réponds avec un JSON contenant exactement :
-{"results": [<scoring_paire_1>, <scoring_paire_2>, ...]}
-
-Chaque scoring_paire_i contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.
-Le nombre d'éléments dans "results" doit correspondre exactement au nombre de paires reçues."""
+- Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont proches sémantiquement."""
 
 
 def _make_pair_text(idx: int, req_a: RequirementNormalized, req_b: RequirementNormalized) -> str:
@@ -1046,13 +1029,31 @@ def _make_pair_text(idx: int, req_a: RequirementNormalized, req_b: RequirementNo
     )
 
 
-def _make_user_prompt(req_a: RequirementNormalized, req_b: RequirementNormalized) -> str:
-    return _make_pair_text(1, req_a, req_b) + "\n\nÉvalue la corrélation."
-
-
-def _make_batch_prompt(pairs: list[tuple[RequirementNormalized, RequirementNormalized]]) -> str:
+def _build_prompt(pairs: list[tuple[RequirementNormalized, RequirementNormalized]]) -> str:
+    """Construit un prompt unique (instructions + données) pour 1 ou N paires."""
     blocks = [_make_pair_text(i + 1, a, b) for i, (a, b) in enumerate(pairs)]
-    return "\n\n".join(blocks) + f"\n\nÉvalue les {len(pairs)} paires ci-dessus."
+    pairs_text = "\n\n".join(blocks)
+
+    if len(pairs) == 1:
+        return (
+            f"{PROMPT_INSTRUCTIONS}\n\n"
+            f"## Paire à évaluer\n\n"
+            f"{pairs_text}\n\n"
+            f"## Format de réponse\n\n"
+            f"Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown.\n"
+            f"Clés attendues : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."
+        )
+    else:
+        return (
+            f"{PROMPT_INSTRUCTIONS}\n\n"
+            f"## Paires à évaluer ({len(pairs)})\n\n"
+            f"{pairs_text}\n\n"
+            f"## Format de réponse\n\n"
+            f"Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown.\n"
+            f"Format attendu : {{\"results\": [<scoring_paire_1>, ..., <scoring_paire_{len(pairs)}>]}}\n"
+            f"Chaque scoring_paire contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.\n"
+            f"Le tableau \"results\" doit contenir exactement {len(pairs)} éléments."
+        )
 
 
 async def _score_batch(
@@ -1065,8 +1066,7 @@ async def _score_batch(
     if not pairs:
         return []
 
-    system = SYSTEM_PROMPT_BATCH if len(pairs) > 1 else SYSTEM_PROMPT
-    user   = _make_batch_prompt(pairs) if len(pairs) > 1 else _make_user_prompt(pairs[0][0], pairs[0][1])
+    prompt = _build_prompt(pairs)
 
     async with semaphore:
         for attempt in range(LLM_MAX_RETRIES + 1):
@@ -1075,8 +1075,7 @@ async def _score_batch(
                     model=llm_model,
                     response_format={"type": "json_object"},
                     messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user",   "content": user},
+                        {"role": "user", "content": prompt},
                     ],
                     temperature=0.0,
                 )
