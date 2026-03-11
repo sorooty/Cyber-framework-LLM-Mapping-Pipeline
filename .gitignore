@@ -6,7 +6,7 @@
 
 # ── Instructions Copilot (confidentielles) ─────────────────────────────────
 copilot-instructions.md
-
+CLAUDE.md
 # ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
