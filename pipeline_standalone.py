@@ -147,21 +147,21 @@ class MappingRelation:
     coverage_A_to_B: float
     coverage_B_to_A: float
     confidence: float
-    relation_type: str  # "equivalence"|"A_couvre_B"|"B_couvre_A"|"partielle"|"aucun_lien"
-    conformity_implication: str = "none"  # "A→B" | "B→A" | "A↔B" | "none"
+    relation_type: str   # "equivalence"|"A_couvre_B"|"B_couvre_A"|"partielle"|"aucun_lien"
+    justification: str = ""  # Explication courte du LLM (max 2 phrases)
 
     def to_dict(self) -> dict:
         return {
-            "id_A":                    self.id_A,
-            "title_A":                 self.title_A,
-            "id_B":                    self.id_B,
-            "title_B":                 self.title_B,
-            "semantic_score":          round(self.semantic_score, 4),
-            "coverage_A_to_B":         round(self.coverage_A_to_B, 4),
-            "coverage_B_to_A":         round(self.coverage_B_to_A, 4),
-            "confidence":              round(self.confidence, 4),
-            "relation_type":           self.relation_type,
-            "conformity_implication":  self.conformity_implication,
+            "id_A":            self.id_A,
+            "title_A":         self.title_A,
+            "id_B":            self.id_B,
+            "title_B":         self.title_B,
+            "semantic_score":  round(self.semantic_score, 4),
+            "coverage_A_to_B": round(self.coverage_A_to_B, 4),
+            "coverage_B_to_A": round(self.coverage_B_to_A, 4),
+            "confidence":      round(self.confidence, 4),
+            "relation_type":   self.relation_type,
+            "justification":   self.justification,
         }
 
 
@@ -178,20 +178,6 @@ def _infer_relation_type(cov_a: float, cov_b: float) -> str:
     if cov_a >= 0.4 or cov_b >= 0.4:
         return "partielle"
     return "aucun_lien"
-
-
-def _infer_conformity_implication(cov_a: float, cov_b: float) -> str:
-    """Retourne l'implication de conformité : si conforme A → conforme B automatiquement."""
-    a_implies_b = cov_a >= THRESHOLD_EQUIVALENCE
-    b_implies_a = cov_b >= THRESHOLD_EQUIVALENCE
-    if a_implies_b and b_implies_a:
-        return "A↔B"
-    if a_implies_b:
-        return "A→B"
-    if b_implies_a:
-        return "B→A"
-    return "none"
-
 
 
 
@@ -989,6 +975,7 @@ class LLMScoringOutput(BaseModel):
     coverage_B_to_A: float = Field(ge=0.0, le=1.0)
     confidence:      float = Field(ge=0.0, le=1.0)
     relation_type:   Literal["equivalence", "A_couvre_B", "B_couvre_A", "partielle", "aucun_lien"]
+    justification:   str   = Field(default="", description="Explication courte du choix (1-2 phrases)")
 
 
 class LLMBatchOutput(BaseModel):
@@ -1012,6 +999,8 @@ Ta mission : évaluer la relation entre deux exigences de sécurité/conformité
 
 **confidence** : ta certitude dans cette évaluation (0=incertain, 1=très certain).
 
+**justification** : 1 à 2 phrases expliquant pourquoi tu as attribué ces scores et ce type de relation. Sois factuel et précis (ex : "A impose l'inventaire des actifs, B demande uniquement leur classification — A couvre donc B mais pas l'inverse.").
+
 ## Règles de classification relation_type
 
 | Condition | relation_type |
@@ -1024,13 +1013,13 @@ Ta mission : évaluer la relation entre deux exigences de sécurité/conformité
 
 ## Cas particuliers
 
-- Si les deux exigences sont **quasi-identiques** (même titre, même sujet) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95.
-- Si les référentiels sont **identiques** (même framework A et B) → traite chaque paire sur son mérite réel.
+- Si les deux exigences sont **quasi-identiques** (même titre, même sujet) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95, justification="Les deux exigences adressent le même objectif de sécurité."
 - Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont proches sémantiquement.
 
 ## Format de réponse
 
-Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown."""
+Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown.
+Clés attendues : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."""
 
 
 SYSTEM_PROMPT_BATCH = SYSTEM_PROMPT + """
@@ -1039,7 +1028,7 @@ Tu reçois une liste numérotée de paires d'exigences.
 Réponds avec un JSON contenant exactement :
 {"results": [<scoring_paire_1>, <scoring_paire_2>, ...]}
 
-Chaque scoring_paire_i contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type.
+Chaque scoring_paire_i contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.
 Le nombre d'éléments dans "results" doit correspondre exactement au nombre de paires reçues."""
 
 
@@ -1163,7 +1152,7 @@ async def _run_scorer_async(
                 coverage_B_to_A=cov_b,
                 confidence=result.confidence,
                 relation_type=_infer_relation_type(cov_a, cov_b),
-                conformity_implication=_infer_conformity_implication(cov_a, cov_b),
+                justification=result.justification,
             ))
 
     # Double vérification sur les paires à fort score
@@ -1186,11 +1175,13 @@ async def _run_scorer_async(
             orig = confirmed_map[(rel.id_A, rel.id_B)]
             cov_a = round((orig.coverage_A_to_B + confirm.coverage_A_to_B) / 2, 4)
             cov_b = round((orig.coverage_B_to_A + confirm.coverage_B_to_A) / 2, 4)
-            orig.coverage_A_to_B        = cov_a
-            orig.coverage_B_to_A        = cov_b
-            orig.confidence             = round((orig.confidence + confirm.confidence) / 2, 4)
-            orig.relation_type          = _infer_relation_type(cov_a, cov_b)
-            orig.conformity_implication = _infer_conformity_implication(cov_a, cov_b)
+            orig.coverage_A_to_B = cov_a
+            orig.coverage_B_to_A = cov_b
+            orig.confidence      = round((orig.confidence + confirm.confidence) / 2, 4)
+            orig.relation_type   = _infer_relation_type(cov_a, cov_b)
+            # Conserver la justification la plus détaillée (passe 2 si disponible)
+            if confirm.justification:
+                orig.justification = confirm.justification
 
     return relations
 
@@ -1218,7 +1209,7 @@ def _export_results(
         headers = [
             "ID Ref A", "Titre Ref A", "ID Ref B", "Titre Ref B",
             "Score sémantique", "Coverage A→B", "Coverage B→A",
-            "Confiance", "Type de relation", "Implication conformité",
+            "Confiance", "Type de relation", "Justification",
         ]
         header_fill = PatternFill("solid", fgColor="1F4E79")
         header_font = Font(bold=True, color="FFFFFF")
@@ -1239,21 +1230,14 @@ def _export_results(
             "partielle":   "FFDDC1",
             "aucun_lien":  "FFC7CE",
         }
-        IMPLICATION_COLORS = {
-            "A↔B": "C6EFCE",
-            "A→B": "DDEBF7",
-            "B→A": "FCE4D6",
-            "none": "F2F2F2",
-        }
 
         for row_idx, r in enumerate(relations, 2):
             values = [
                 r.id_A, r.title_A, r.id_B, r.title_B,
                 r.semantic_score, r.coverage_A_to_B, r.coverage_B_to_A,
-                r.confidence, r.relation_type, r.conformity_implication,
+                r.confidence, r.relation_type, r.justification,
             ]
             row_fill = PatternFill("solid", fgColor=RELATION_COLORS.get(r.relation_type, "FFFFFF"))
-            impl_fill = PatternFill("solid", fgColor=IMPLICATION_COLORS.get(r.conformity_implication, "F2F2F2"))
             for col_idx, val in enumerate(values, 1):
                 cell = ws.cell(row=row_idx, column=col_idx, value=val)
                 cell.border    = border
@@ -1262,10 +1246,8 @@ def _export_results(
                     cell.number_format = "0.00"
                 if col_idx == 9:
                     cell.fill = row_fill
-                elif col_idx == 10:
-                    cell.fill = impl_fill
 
-        col_widths = [12, 50, 16, 50, 12, 12, 12, 10, 18, 20]
+        col_widths = [12, 50, 16, 50, 12, 12, 12, 10, 18, 60]
         for i, w in enumerate(col_widths, 1):
             ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -1284,7 +1266,7 @@ def _export_results(
                 values = [
                     r.id_A, r.title_A, r.id_B, r.title_B,
                     r.semantic_score, r.coverage_A_to_B, r.coverage_B_to_A,
-                    r.confidence, r.relation_type, r.conformity_implication,
+                    r.confidence, r.relation_type, r.justification,
                 ]
                 for col_idx, val in enumerate(values, 1):
                     cell = ws2.cell(row=row_idx, column=col_idx, value=val)

@@ -808,10 +808,9 @@ if st.session_state.results:
                 "equivalence": "🟢", "A_couvre_B": "🟡",
                 "B_couvre_A": "🟠", "partielle": "🔵", "aucun_lien": "⚫",
             }
-            IMPL_ICONS = {"A↔B": "🔄", "A→B": "➡️", "B→A": "⬅️", "none": "—"}
 
             # Filtre
-            col_r1, col_r2, col_r3 = st.columns(3)
+            col_r1, col_r2 = st.columns(2)
             with col_r1:
                 rt_filter = st.multiselect(
                     "Type de relation",
@@ -820,55 +819,34 @@ if st.session_state.results:
                 )
             with col_r2:
                 conf_min = st.slider("Confiance min", 0.0, 1.0, 0.0, 0.05)
-            with col_r3:
-                impl_filter = st.multiselect(
-                    "Implication conformité",
-                    options=df_r["conformity_implication"].unique().tolist() if "conformity_implication" in df_r.columns else [],
-                    default=df_r["conformity_implication"].unique().tolist() if "conformity_implication" in df_r.columns else [],
-                )
 
             mask = df_r["relation_type"].isin(rt_filter) & (df_r["confidence"] >= conf_min)
-            if impl_filter and "conformity_implication" in df_r.columns:
-                mask = mask & df_r["conformity_implication"].isin(impl_filter)
             df_show = df_r[mask].sort_values("confidence", ascending=False)
 
             st.caption(f"{len(df_show)} relations affichées")
 
             col_config = {
-                "relation_type":          st.column_config.TextColumn("Type", width=120),
-                "conformity_implication": st.column_config.TextColumn("Implication", width=100,
-                    help="A→B : conforme A ⟹ conforme B | B→A : conforme B ⟹ conforme A | A↔B : équivalents"),
-                "title_A":                st.column_config.TextColumn(f"Titre {ref_a_name}", width=260),
-                "title_B":                st.column_config.TextColumn(f"Titre {ref_b_name}", width=260),
-                "semantic_score":         st.column_config.ProgressColumn("Sémantique", min_value=0, max_value=1, format="%.2f"),
-                "coverage_A_to_B":        st.column_config.ProgressColumn("Cov A→B", min_value=0, max_value=1, format="%.2f"),
-                "coverage_B_to_A":        st.column_config.ProgressColumn("Cov B→A", min_value=0, max_value=1, format="%.2f"),
-                "confidence":             st.column_config.ProgressColumn("Confiance", min_value=0, max_value=1, format="%.2f"),
+                "relation_type":   st.column_config.TextColumn("Type", width=120),
+                "title_A":         st.column_config.TextColumn(f"Titre {ref_a_name}", width=260),
+                "title_B":         st.column_config.TextColumn(f"Titre {ref_b_name}", width=260),
+                "semantic_score":  st.column_config.ProgressColumn("Sémantique", min_value=0, max_value=1, format="%.2f"),
+                "coverage_A_to_B": st.column_config.ProgressColumn("Cov A→B", min_value=0, max_value=1, format="%.2f"),
+                "coverage_B_to_A": st.column_config.ProgressColumn("Cov B→A", min_value=0, max_value=1, format="%.2f"),
+                "confidence":      st.column_config.ProgressColumn("Confiance", min_value=0, max_value=1, format="%.2f"),
+                "justification":   st.column_config.TextColumn("Justification", width=400,
+                    help="Explication du LLM pour ce choix de relation"),
             }
             st.dataframe(df_show, use_container_width=True, column_config=col_config, hide_index=True)
 
-            # Répartition
-            col_pie1, col_pie2 = st.columns(2)
-            with col_pie1:
-                st.subheader("Types de relation")
-                vc = df_r["relation_type"].value_counts()
-                fig_pie, ax_pie = plt.subplots(figsize=(5, 4))
-                ax_pie.pie(vc.values, labels=[f"{COLORS.get(l,'')} {l}" for l in vc.index],
-                           colors=_pie_colors[:len(vc)], autopct="%1.0f%%", startangle=90)
-                ax_pie.set_title("Mapping final")
-                plt.tight_layout()
-                st.pyplot(fig_pie)
-            with col_pie2:
-                if "conformity_implication" in df_r.columns:
-                    st.subheader("Implications de conformité")
-                    vi = df_r["conformity_implication"].value_counts()
-                    fig_impl, ax_impl = plt.subplots(figsize=(5, 4))
-                    ax_impl.pie(vi.values,
-                                labels=[f"{IMPL_ICONS.get(l,'')} {l}" for l in vi.index],
-                                colors=_pie_colors[:len(vi)], autopct="%1.0f%%", startangle=90)
-                    ax_impl.set_title("Implication conformité")
-                    plt.tight_layout()
-                    st.pyplot(fig_impl)
+            # Répartition types de relation
+            st.subheader("Types de relation")
+            vc = df_r["relation_type"].value_counts()
+            fig_pie, ax_pie = plt.subplots(figsize=(5, 4))
+            ax_pie.pie(vc.values, labels=[f"{COLORS.get(l,'')} {l}" for l in vc.index],
+                       colors=_pie_colors[:len(vc)], autopct="%1.0f%%", startangle=90)
+            ax_pie.set_title("Mapping final")
+            plt.tight_layout()
+            st.pyplot(fig_pie)
 
     # ── Tab 4 : Export ────────────────────────────────────────────────────────
     with tabs[3]:
