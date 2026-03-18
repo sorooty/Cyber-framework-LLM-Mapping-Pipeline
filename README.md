@@ -151,4 +151,28 @@ All thresholds are defined at the top of `pipeline_standalone.py` (and mirrored 
 
 ---
 
+## References
+
+| # | Auteurs / Source | Titre | Lien |
+|---|---|---|---|
+| 1 | Nature (2025) | Two-stage LLM approach for entity mapping | [↗](https://www.nature.com/articles/s41598-025-16213-z) |
+| 2 | EMNLP 2025 | Hybrid LLM & Embedding for Semantic Attribute Mapping | [↗](https://aclanthology.org/2025.emnlp-industry.120.pdf) |
+| 3 | arXiv 2025 | AutoPK: Hybrid Similarity + LLM | [↗](https://arxiv.org/html/2510.00039v1) |
+| 4 | journal-isi (2024) | NLP for Regulatory Document Interconnections | [↗](https://journal-isi.org/index.php/isi/article/download/861/436) |
+| 5 | Semantic Web Journal | RP-Match: Automatic Regulation Mapping | [↗](https://www.semantic-web-journal.net/sites/default/files/swj312.pdf) |
+| 6 | RegNLP 2025 | Regulatory QA using Generative AI | [↗](https://aclanthology.org/2025.regnlp-1.16.pdf) |
+| 7 | Frontiers (2025) | Ontology-Based Regulatory Document Analysis | [↗](https://www.frontiersin.org/journals/built-environment/articles/10.3389/fbuil.2025.1575913/full) |
+| 8 | IEEE TSE (2023) | NLP-Based Automated Compliance Checking | [↗](https://dl.acm.org/doi/abs/10.1109/TSE.2023.3288901) |
+| 9 | arXiv (2025) | Hybrid Retrieval for Hallucination Mitigation | [↗](https://arxiv.org/html/2504.05324v1) |
+| 10 | arXiv (2025) | RAG Architectures for Policy Documents | [↗](https://arxiv.org/html/2601.15457v1) |
+| 11 | Reimers & Gurevych (2019) | Sentence-BERT | [↗](https://arxiv.org/abs/1908.10084) |
+| 12 | SBERT.net | STS Documentation | [↗](https://sbert.net/examples/sentence_transformer/training/sts/README.html) |
+| 13 | Milvus (2026) | Sentence Transformers — common mistakes | [↗](https://milvus.io/ai-quick-reference/what-are-common-mistakes-that-could-lead-to-poor-results-when-using-sentence-transformer-em) |
+| 14 | PMC (2025) | Semantic Similarity on Long Texts | [↗](https://pmc.ncbi.nlm.nih.gov/articles/PMC12453783/) |
+| 15 | SCITEPRESS (2025) | Ontology-Based System Requirements | [↗](https://www.scitepress.org/Papers/2025/132105/132105.pdf) |
+| 16 | model-engineering.info (2024) | Requirements-to-Code Traceability | [↗](https://model-engineering.info/publications/papers/ER24-Requirements2Code.pdf) |
+| 17 | intuitem (2024) | AI-Assisted Compliance Mapping | [↗](https://intuitem.com/ai-assisted-mapping) |
+
+
+---
 *by Sensey*

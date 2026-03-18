@@ -59,11 +59,13 @@ from sentence_transformers import SentenceTransformer
 # Config
 # ══════════════════════════════════════════════════════════════════════════════
 
-ROOT_DIR    = Path(__file__).parent / "referential_mapping"
-DATA_DIR    = ROOT_DIR / "data"
+DATA_DIR    = Path(__file__).parent / "data"
 OUTPUT_DIR  = DATA_DIR / "outputs"
+LOGS_DIR    = DATA_DIR / "logs"
 SURVEYS_DIR = Path(__file__).parent / "files" / "surveys"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 SURVEY_TS_PATH = Path(__file__).parent / "files" / "survey.ts"
 
