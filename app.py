@@ -668,32 +668,10 @@ if run_btn:
     results["candidates_all"] = candidates_all
     results["matrices_all"]   = matrices_all
 
-    # ── Étape 3 — Heatmaps en mémoire ────────────────────────────────────────
-    with st.status("**Étape 3** — Génération des heatmaps ...", expanded=True) as s:
-        t0 = time.time()
-        heatmap_figs: dict[tuple[str, str], object] = {}
-        for (fw_i, fw_j), matrix in matrices_all.items():
-            ref_i = frameworks_data[fw_i]
-            ref_j = frameworks_data[fw_j]
-            fig_w = min(20, max(10, len(ref_j) * 0.13))
-            fig_h = min(14, max(7,  len(ref_i) * 0.08))
-            fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-            vmin_dyn = float(np.percentile(matrix, 5))
-            sns.heatmap(matrix,
-                        xticklabels=[r.id for r in ref_j],
-                        yticklabels=[r.id for r in ref_i],
-                        cmap=_heatmap_cmap,
-                        vmin=vmin_dyn, vmax=1.0, ax=ax,
-                        linewidths=0, cbar_kws={"label": "Similarité cosinus"})
-            ax.set_title(f"{fw_i} ↔ {fw_j}", fontsize=11)
-            ax.set_xlabel(fw_j, fontsize=9)
-            ax.set_ylabel(fw_i, fontsize=9)
-            ax.tick_params(axis="x", labelsize=4, rotation=90)
-            ax.tick_params(axis="y", labelsize=4)
-            plt.tight_layout()
-            heatmap_figs[(fw_i, fw_j)] = fig
-        s.update(label=f"✅ Étape 3 — {len(heatmap_figs)} heatmap(s) générée(s)  ({time.time()-t0:.1f}s)")
-    results["heatmap_figs"] = heatmap_figs
+    # ── Étape 3 — (heatmaps générées à la demande dans l'onglet) ─────────────
+    with st.status("**Étape 3** — Matrices de similarité prêtes ...", expanded=False) as s:
+        total_cells = sum(m.size for m in matrices_all.values())
+        s.update(label=f"✅ Étape 3 — {len(matrices_all)} matrice(s) prête(s) ({total_cells:,} cellules)  — heatmaps générées à la demande")
 
     # ── Étape 4 (optionnel) ───────────────────────────────────────────────────
     relations_all: dict[tuple[str, str], list] = {}
@@ -737,7 +715,6 @@ if st.session_state.results:
     frameworks_data = r["frameworks_data"]
     candidates_all  = r["candidates_all"]
     matrices_all    = r["matrices_all"]
-    heatmap_figs    = r["heatmap_figs"]
     relations_all   = r.get("relations_all", {})
     removed_flat    = r.get("removed_flat", [])
 
@@ -779,7 +756,6 @@ if st.session_state.results:
     fw_i, fw_j     = pair_keys[selected_pair_idx]
     candidates     = candidates_all[(fw_i, fw_j)]
     matrix         = matrices_all[(fw_i, fw_j)]
-    heatmap_fig    = heatmap_figs.get((fw_i, fw_j))
     relations      = relations_all.get((fw_i, fw_j), [])
     ref_i          = frameworks_data[fw_i]
     ref_j          = frameworks_data[fw_j]
@@ -793,8 +769,48 @@ if st.session_state.results:
     with tabs[0]:
         st.subheader("Matrice de similarité sémantique")
         st.caption("Couleur = score cosinus entre les titres. Plus c'est vert, plus les exigences sont proches sémantiquement.")
-        if heatmap_fig:
-            st.pyplot(heatmap_fig, use_container_width=True)
+
+        MAX_LABELS = 80  # au-delà, on supprime les labels pour éviter la surcharge
+        rows, cols = matrix.shape
+        display_matrix = matrix
+        labels_i = [r.id for r in ref_i]
+        labels_j = [r.id for r in ref_j]
+
+        # Downsample si trop grand (évite le crash mémoire sur très grandes matrices)
+        if rows > MAX_LABELS or cols > MAX_LABELS:
+            step_r = max(1, rows // MAX_LABELS)
+            step_c = max(1, cols // MAX_LABELS)
+            display_matrix = matrix[::step_r, ::step_c]
+            labels_i = labels_i[::step_r]
+            labels_j = labels_j[::step_c]
+            st.info(f"ℹ️ Matrice réduite pour l'affichage : {display_matrix.shape[0]}×{display_matrix.shape[1]} "
+                    f"(originale : {rows}×{cols}, 1 ligne/{step_r}, 1 col/{step_c})")
+
+        show_labels = display_matrix.shape[0] <= 60 and display_matrix.shape[1] <= 60
+
+        fig_w = min(18, max(8, display_matrix.shape[1] * 0.18))
+        fig_h = min(12, max(6, display_matrix.shape[0] * 0.14))
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        vmin_dyn = float(np.percentile(display_matrix, 5))
+        sns.heatmap(
+            display_matrix,
+            xticklabels=labels_j if show_labels else False,
+            yticklabels=labels_i if show_labels else False,
+            cmap=_heatmap_cmap,
+            vmin=vmin_dyn, vmax=1.0, ax=ax,
+            linewidths=0,
+            rasterized=True,
+            cbar_kws={"label": "Similarité cosinus"},
+        )
+        ax.set_title(f"{fw_i} ↔ {fw_j}", fontsize=11)
+        ax.set_xlabel(fw_j, fontsize=9)
+        ax.set_ylabel(fw_i, fontsize=9)
+        if show_labels:
+            ax.tick_params(axis="x", labelsize=4, rotation=90)
+            ax.tick_params(axis="y", labelsize=4)
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)  # libérer la mémoire immédiatement après affichage
 
     # ── Tab 2 : Paires candidates ─────────────────────────────────────────────
     with tabs[1]:
@@ -832,6 +848,7 @@ if st.session_state.results:
         ax_dist.set_title("Distribution des scores sémantiques")
         plt.tight_layout()
         st.pyplot(fig_dist, use_container_width=False)
+        plt.close(fig_dist)
 
     # ── Tab 3 : Mapping final ─────────────────────────────────────────────────
     with tabs[2]:
@@ -887,6 +904,7 @@ if st.session_state.results:
             ax_pie.set_title("Mapping final")
             plt.tight_layout()
             st.pyplot(fig_pie)
+            plt.close(fig_pie)
 
     # ── Tab 4 : Export ────────────────────────────────────────────────────────
     with tabs[3]:
