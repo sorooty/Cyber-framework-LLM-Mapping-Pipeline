@@ -41,6 +41,8 @@ plt.rcParams.update(_MPLRC_DARK)   # défaut dark ; mis à jour en runtime si li
 import pipeline_standalone as ps
 from pipeline_standalone import (
     list_frameworks, load_framework, get_expected_count,
+    run_ingestion_all, run_similarity_all, run_heatmaps_all,
+    run_scorer_all, run_cleanup_all, _export_global,
     run_similarity, run_scorer, run_cleanup, _export_results,
     EMBEDDING_MODEL, SEMANTIC_THRESHOLD, TOP_K, LLM_MODEL,
     LLM_MIN_CONFIDENCE, LLM_BATCH_SIZE,
@@ -563,10 +565,14 @@ with st.sidebar:
     fw_names = sorted(frameworks.keys())
 
     st.subheader("📂 Référentiels")
-    ref_a_name = st.selectbox("Référentiel A", fw_names,
-                               index=fw_names.index("cis-controls-v8") if "cis-controls-v8" in fw_names else 0)
-    ref_b_name = st.selectbox("Référentiel B", fw_names,
-                               index=fw_names.index("nistCsfV2") if "nistCsfV2" in fw_names else 1)
+    _pref = [f for f in ["cis-controls-v8", "nistCsfV2"] if f in fw_names]
+    _default_fw = _pref if len(_pref) == 2 else fw_names[:2]
+    selected_fws = st.multiselect(
+        "Sélectionner les référentiels (min. 2)",
+        options=fw_names,
+        default=_default_fw,
+        help="Sélectionne 2 référentiels ou plus — toutes les paires seront mappées",
+    )
 
     st.divider()
     st.subheader("⚙️ Paramètres")
@@ -618,10 +624,13 @@ st.markdown(f"""
   <p>Automated semantic mapping between security & compliance frameworks — powered by embeddings + LLM verification</p>
 </div>
 """, unsafe_allow_html=True)
-st.markdown(f"**`{ref_a_name}`** &nbsp;↔&nbsp; **`{ref_b_name}`**")
 
-if ref_a_name == ref_b_name:
-    st.warning("⚠️ Sélectionne deux référentiels différents.")
+_pair_labels = [f"**`{a}`** ↔ **`{b}`**" for a, b in __import__("itertools").combinations(selected_fws, 2)]
+if selected_fws:
+    st.markdown("  &nbsp;·&nbsp;  ".join(_pair_labels) if _pair_labels else "")
+
+if len(selected_fws) < 2:
+    st.warning("⚠️ Sélectionne au moins 2 référentiels dans la barre latérale.")
     st.stop()
 
 # ─ State ─────────────────────────────────────────────────────────────────────
@@ -633,90 +642,91 @@ if run_btn:
     st.session_state.results = None
     results = {}
 
+    yaml_paths_selected = [str(frameworks[name]) for name in selected_fws]
+
     # ── Étape 1 ──────────────────────────────────────────────────────────────
     with st.status("**Étape 1** — Parsing & normalisation ...", expanded=True) as s:
         t0 = time.time()
-        ref_A = load_framework(frameworks[ref_a_name], framework_name=ref_a_name)
-        ref_B = load_framework(frameworks[ref_b_name], framework_name=ref_b_name)
-        exp_A = get_expected_count(ref_a_name)
-        exp_B = get_expected_count(ref_b_name)
-        lbl_A = f"{len(ref_A)}/{exp_A}" if exp_A else str(len(ref_A))
-        lbl_B = f"{len(ref_B)}/{exp_B}" if exp_B else str(len(ref_B))
-        ok_A  = "✅" if (exp_A is None or len(ref_A) == exp_A) else "⚠️"
-        ok_B  = "✅" if (exp_B is None or len(ref_B) == exp_B) else "⚠️"
-        s.update(label=f"{ok_A} Étape 1 — A : {lbl_A} exigences · {ok_B} B : {lbl_B} exigences  ({time.time()-t0:.1f}s)")
-    results["ref_A"] = ref_A
-    results["ref_B"] = ref_B
+        frameworks_data = run_ingestion_all(yaml_paths_selected, force=True)
+        total_reqs = sum(len(v) for v in frameworks_data.values())
+        summary = "  ·  ".join(f"{k}: {len(v)}" for k, v in frameworks_data.items())
+        s.update(label=f"✅ Étape 1 — {len(frameworks_data)} référentiels · {total_reqs} exigences  ({time.time()-t0:.1f}s) — {summary}")
+    results["frameworks_data"] = frameworks_data
 
     # ── Étape 2 ──────────────────────────────────────────────────────────────
     with st.status("**Étape 2** — Similarité sémantique (embeddings) ...", expanded=True) as s:
         t0 = time.time()
-        candidates, matrix = run_similarity(
-            ref_A, ref_B,
+        candidates_all, matrices_all = run_similarity_all(
+            frameworks_data,
             force=True,
             semantic_threshold=sem_thresh,
             top_k=top_k,
-            fw_a_name=ref_a_name,
-            fw_b_name=ref_b_name,
         )
-        total_combinations = len(ref_A) * len(ref_B)
-        pct = 100 * len(candidates) / total_combinations
-        s.update(label=f"✅ Étape 2 — {len(candidates)} paires ({pct:.1f}% de {total_combinations}) en {time.time()-t0:.1f}s")
-    results["matrix"]     = matrix
-    results["candidates"] = candidates
+        total_cands = sum(len(v) for v in candidates_all.values())
+        n_pairs = len(candidates_all)
+        s.update(label=f"✅ Étape 2 — {total_cands} paires candidates sur {n_pairs} combinaison(s)  ({time.time()-t0:.1f}s)")
+    results["candidates_all"] = candidates_all
+    results["matrices_all"]   = matrices_all
 
-    # ── Étape 3 ──────────────────────────────────────────────────────────────
-    with st.status("**Étape 3** — Génération de la heatmap ...", expanded=True) as s:
+    # ── Étape 3 — Heatmaps en mémoire ────────────────────────────────────────
+    with st.status("**Étape 3** — Génération des heatmaps ...", expanded=True) as s:
         t0 = time.time()
-        # Taille cappée : max 20×14 pour rester lisible dans l'UI
-        fig_w = min(20, max(10, len(ref_B) * 0.13))
-        fig_h = min(14, max(7,  len(ref_A) * 0.08))
-        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-        # vmin dynamique au 5e percentile → contraste maximal sur la plage réelle
-        vmin_dynamic = float(np.percentile(matrix, 5))
-        sns.heatmap(matrix,
-                    xticklabels=[r.id for r in ref_B],
-                    yticklabels=[r.id for r in ref_A],
-                    cmap=_heatmap_cmap,
-                    vmin=vmin_dynamic, vmax=1.0, ax=ax,
-                    linewidths=0, cbar_kws={"label": "Similarité cosinus"})
-        ax.set_title(f"Similarité sémantique — {ref_a_name} (A) ↔ {ref_b_name} (B)", fontsize=11)
-        ax.set_xlabel("Ref B", fontsize=9)
-        ax.set_ylabel("Ref A", fontsize=9)
-        ax.tick_params(axis="x", labelsize=4, rotation=90)
-        ax.tick_params(axis="y", labelsize=4)
-        plt.tight_layout()
-        results["heatmap_fig"] = fig
-        s.update(label=f"✅ Étape 3 — Heatmap générée en {time.time()-t0:.1f}s")
+        heatmap_figs: dict[tuple[str, str], object] = {}
+        for (fw_i, fw_j), matrix in matrices_all.items():
+            ref_i = frameworks_data[fw_i]
+            ref_j = frameworks_data[fw_j]
+            fig_w = min(20, max(10, len(ref_j) * 0.13))
+            fig_h = min(14, max(7,  len(ref_i) * 0.08))
+            fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+            vmin_dyn = float(np.percentile(matrix, 5))
+            sns.heatmap(matrix,
+                        xticklabels=[r.id for r in ref_j],
+                        yticklabels=[r.id for r in ref_i],
+                        cmap=_heatmap_cmap,
+                        vmin=vmin_dyn, vmax=1.0, ax=ax,
+                        linewidths=0, cbar_kws={"label": "Similarité cosinus"})
+            ax.set_title(f"{fw_i} ↔ {fw_j}", fontsize=11)
+            ax.set_xlabel(fw_j, fontsize=9)
+            ax.set_ylabel(fw_i, fontsize=9)
+            ax.tick_params(axis="x", labelsize=4, rotation=90)
+            ax.tick_params(axis="y", labelsize=4)
+            plt.tight_layout()
+            heatmap_figs[(fw_i, fw_j)] = fig
+        s.update(label=f"✅ Étape 3 — {len(heatmap_figs)} heatmap(s) générée(s)  ({time.time()-t0:.1f}s)")
+    results["heatmap_figs"] = heatmap_figs
 
     # ── Étape 4 (optionnel) ───────────────────────────────────────────────────
-    relations = None
-    removed   = []
+    relations_all: dict[tuple[str, str], list] = {}
+    removed_flat: list = []
     if run_llm and api_key:
         with st.status("**Étape 4** — Scoring LLM ...", expanded=True) as s:
             t0 = time.time()
             os.environ["OPENAI_API_KEY"] = api_key
-            relations = run_scorer(
-                candidates, ref_A, ref_B,
+            relations_all = run_scorer_all(
+                candidates_all, frameworks_data,
                 force=True,
                 llm_model=llm_model,
                 batch_size=LLM_BATCH_SIZE,
             )
-            s.update(label=f"✅ Étape 4 — {len(relations)} relations scorées en {time.time()-t0:.1f}s")
+            total_rels = sum(len(v) for v in relations_all.values())
+            s.update(label=f"✅ Étape 4 — {total_rels} relations scorées  ({time.time()-t0:.1f}s)")
 
         # ── Étape 5 — Nettoyage ──────────────────────────────────────────────
         if not skip_cleanup:
             with st.status("**Étape 5** — Nettoyage des liaisons inutiles ...", expanded=True) as s:
-                relations, removed = run_cleanup(relations, min_confidence=min_conf)
+                relations_all, removed_flat = run_cleanup_all(
+                    relations_all, min_confidence=min_conf
+                )
+                total_clean = sum(len(v) for v in relations_all.values())
                 s.update(
-                    label=(f"✅ Étape 5 — {len(relations)} relations conservées, "
-                           f"{len(removed)} supprimées (aucun_lien / conf < {min_conf:.2f})")
+                    label=(f"✅ Étape 5 — {total_clean} relations conservées, "
+                           f"{len(removed_flat)} supprimées (aucun_lien / conf < {min_conf:.2f})")
                 )
     elif run_llm and not api_key:
         st.error("❌ Clé OpenAI manquante.")
 
-    results["relations"] = relations
-    results["removed"]   = removed
+    results["relations_all"] = relations_all
+    results["removed_flat"]  = removed_flat
     st.session_state.results = results
     st.success("✅ Pipeline terminé !")
 
@@ -724,32 +734,57 @@ if run_btn:
 # ─ Display results ────────────────────────────────────────────────────────────
 if st.session_state.results:
     r = st.session_state.results
-    ref_A      = r["ref_A"]
-    ref_B      = r["ref_B"]
-    matrix     = r["matrix"]
-    candidates = r["candidates"]
-    relations  = r["relations"]
-    removed    = r.get("removed", [])
+    frameworks_data = r["frameworks_data"]
+    candidates_all  = r["candidates_all"]
+    matrices_all    = r["matrices_all"]
+    heatmap_figs    = r["heatmap_figs"]
+    relations_all   = r.get("relations_all", {})
+    removed_flat    = r.get("removed_flat", [])
 
-    # ── Métriques ─────────────────────────────────────────────────────────────
-    total_comb = len(ref_A) * len(ref_B)
-    pct = 100 * len(candidates) / total_comb
+    pair_keys   = list(candidates_all.keys())
+    total_reqs  = sum(len(v) for v in frameworks_data.values())
+    total_cands = sum(len(v) for v in candidates_all.values())
+    total_rels  = sum(len(v) for v in relations_all.values())
 
+    # ── Métriques globales ────────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("📋 Exigences A", len(ref_A))
+        st.metric("📚 Référentiels", len(frameworks_data))
     with col2:
-        st.metric("📋 Exigences B", len(ref_B))
+        st.metric("📋 Exigences totales", total_reqs)
     with col3:
-        st.metric("🔗 Paires candidates", len(candidates), delta=f"{pct:.1f}% des {total_comb}")
+        st.metric("🔗 Paires candidates", total_cands,
+                  delta=f"{len(pair_keys)} combinaison(s)")
     with col4:
-        if relations:
-            st.metric("✅ Relations conservées", len(relations),
-                      delta=f"-{len(removed)} supprimées" if removed else None)
+        if relations_all:
+            st.metric("✅ Relations conservées", total_rels,
+                      delta=f"-{len(removed_flat)} supprimées" if removed_flat else None)
         else:
             st.metric("💡 LLM", "Non lancé")
 
     st.divider()
+
+    # ── Sélecteur de paire ────────────────────────────────────────────────────
+    pair_options = [f"{a}  ↔  {b}" for a, b in pair_keys]
+    if len(pair_keys) == 1:
+        selected_pair_idx = 0
+    else:
+        selected_pair_label = st.selectbox(
+            "🔍 Inspecter une paire",
+            options=pair_options,
+            index=0,
+        )
+        selected_pair_idx = pair_options.index(selected_pair_label)
+
+    fw_i, fw_j     = pair_keys[selected_pair_idx]
+    candidates     = candidates_all[(fw_i, fw_j)]
+    matrix         = matrices_all[(fw_i, fw_j)]
+    heatmap_fig    = heatmap_figs.get((fw_i, fw_j))
+    relations      = relations_all.get((fw_i, fw_j), [])
+    ref_i          = frameworks_data[fw_i]
+    ref_j          = frameworks_data[fw_j]
+
+    st.markdown(f"### **`{fw_i}`** ↔ **`{fw_j}`** — {len(candidates)} paires")
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
     tabs = st.tabs(["🗺️ Heatmap", "🔗 Paires candidates", "✅ Mapping final", "📥 Export"])
@@ -758,7 +793,8 @@ if st.session_state.results:
     with tabs[0]:
         st.subheader("Matrice de similarité sémantique")
         st.caption("Couleur = score cosinus entre les titres. Plus c'est vert, plus les exigences sont proches sémantiquement.")
-        st.pyplot(r["heatmap_fig"], use_container_width=True)
+        if heatmap_fig:
+            st.pyplot(heatmap_fig, use_container_width=True)
 
     # ── Tab 2 : Paires candidates ─────────────────────────────────────────────
     with tabs[1]:
@@ -818,28 +854,32 @@ if st.session_state.results:
                     default=df_r["relation_type"].unique().tolist(),
                 )
             with col_r2:
-                conf_min = st.slider("Confiance min", 0.0, 1.0, 0.0, 0.05)
+                min_conf_display = st.slider("Confiance min (affichage)", 0.0, 1.0,
+                                             float(df_r["confidence"].min()), 0.05, key="min_conf_disp")
 
-            mask = df_r["relation_type"].isin(rt_filter) & (df_r["confidence"] >= conf_min)
-            df_show = df_r[mask].sort_values("confidence", ascending=False)
+            df_filtered = df_r[
+                (df_r["relation_type"].isin(rt_filter)) &
+                (df_r["confidence"] >= min_conf_display)
+            ]
 
-            st.caption(f"{len(df_show)} relations affichées")
+            st.dataframe(
+                df_filtered.sort_values("confidence", ascending=False),
+                use_container_width=True,
+                column_config={
+                    "confidence":      st.column_config.ProgressColumn("Confiance", min_value=0, max_value=1, format="%.2f"),
+                    "coverage_A_to_B": st.column_config.ProgressColumn("Cov A→B",  min_value=0, max_value=1, format="%.2f"),
+                    "coverage_B_to_A": st.column_config.ProgressColumn("Cov B→A",  min_value=0, max_value=1, format="%.2f"),
+                    "relation_type":   st.column_config.TextColumn("Type"),
+                    "title_A":         st.column_config.TextColumn("Titre A", width=250),
+                    "title_B":         st.column_config.TextColumn("Titre B", width=250),
+                    "justification":   st.column_config.TextColumn("Justification", width=350),
+                    "framework_A":     st.column_config.TextColumn("Fw A", width=120),
+                    "framework_B":     st.column_config.TextColumn("Fw B", width=120),
+                },
+                hide_index=True,
+            )
 
-            col_config = {
-                "relation_type":   st.column_config.TextColumn("Type", width=120),
-                "title_A":         st.column_config.TextColumn(f"Titre {ref_a_name}", width=260),
-                "title_B":         st.column_config.TextColumn(f"Titre {ref_b_name}", width=260),
-                "semantic_score":  st.column_config.ProgressColumn("Sémantique", min_value=0, max_value=1, format="%.2f"),
-                "coverage_A_to_B": st.column_config.ProgressColumn("Cov A→B", min_value=0, max_value=1, format="%.2f"),
-                "coverage_B_to_A": st.column_config.ProgressColumn("Cov B→A", min_value=0, max_value=1, format="%.2f"),
-                "confidence":      st.column_config.ProgressColumn("Confiance", min_value=0, max_value=1, format="%.2f"),
-                "justification":   st.column_config.TextColumn("Justification", width=400,
-                    help="Explication du LLM pour ce choix de relation"),
-            }
-            st.dataframe(df_show, use_container_width=True, column_config=col_config, hide_index=True)
-
-            # Répartition types de relation
-            st.subheader("Types de relation")
+            # Diagramme en camembert
             vc = df_r["relation_type"].value_counts()
             fig_pie, ax_pie = plt.subplots(figsize=(5, 4))
             ax_pie.pie(vc.values, labels=[f"{COLORS.get(l,'')} {l}" for l in vc.index],
@@ -855,9 +895,9 @@ if st.session_state.results:
         df_c = pd.DataFrame([c.to_dict() for c in candidates])
         csv_candidates = df_c.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "📥 Télécharger les paires candidates (CSV)",
+            f"📥 Paires candidates — {fw_i} ↔ {fw_j} (CSV)",
             data=csv_candidates,
-            file_name=f"candidates_{ref_a_name}_vs_{ref_b_name}.csv",
+            file_name=f"candidates_{fw_i}_vs_{fw_j}.csv",
             mime="text/csv",
         )
 
@@ -865,57 +905,57 @@ if st.session_state.results:
             df_r = pd.DataFrame([rel.to_dict() for rel in relations])
             csv_relations = df_r.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "📥 Télécharger le mapping final (CSV)",
+                f"📥 Mapping final — {fw_i} ↔ {fw_j} (CSV)",
                 data=csv_relations,
-                file_name=f"mapping_{ref_a_name}_vs_{ref_b_name}.csv",
+                file_name=f"mapping_{fw_i}_vs_{fw_j}.csv",
                 mime="text/csv",
             )
 
-            # Excel
-            try:
-                xlsx_path = ps.OUTPUT_DIR / f"mapping_{ref_a_name}_vs_{ref_b_name}.xlsx"
-                if xlsx_path.exists():
-                    with open(xlsx_path, "rb") as f:
-                        st.download_button(
-                            "📥 Télécharger le mapping final (Excel)",
-                            data=f.read(),
-                            file_name=xlsx_path.name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        )
-            except Exception:
-                pass
+        # Export global (toutes paires) si LLM lancé
+        if relations_all:
+            all_rels = [rel for v in relations_all.values() for rel in v]
+            df_all = pd.DataFrame([rel.to_dict() for rel in all_rels])
+            csv_all = df_all.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                f"📥 Mapping global — toutes paires ({len(all_rels)} relations) (CSV)",
+                data=csv_all,
+                file_name="mapping_all_frameworks.csv",
+                mime="text/csv",
+            )
 
-        # JSON des exigences normalisées
-        json_A = json.dumps([r.to_dict() for r in ref_A], ensure_ascii=False, indent=2).encode("utf-8")
-        json_B = json.dumps([r.to_dict() for r in ref_B], ensure_ascii=False, indent=2).encode("utf-8")
+        # JSON des exigences normalisées pour la paire sélectionnée
+        json_i = json.dumps([req.to_dict() for req in ref_i], ensure_ascii=False, indent=2).encode("utf-8")
+        json_j = json.dumps([req.to_dict() for req in ref_j], ensure_ascii=False, indent=2).encode("utf-8")
         col_e1, col_e2 = st.columns(2)
         with col_e1:
-            st.download_button(f"📥 {ref_a_name}.json", json_A,
-                               file_name=f"{ref_a_name}_normalized.json", mime="application/json")
+            st.download_button(f"📥 {fw_i}.json", json_i,
+                               file_name=f"{fw_i}_normalized.json", mime="application/json")
         with col_e2:
-            st.download_button(f"📥 {ref_b_name}.json", json_B,
-                               file_name=f"{ref_b_name}_normalized.json", mime="application/json")
+            st.download_button(f"📥 {fw_j}.json", json_j,
+                               file_name=f"{fw_j}_normalized.json", mime="application/json")
 
 else:
     # ── Écran d'accueil ────────────────────────────────────────────────────────
     st.markdown("""
     <div style="margin: 32px 0 24px;">
       <p style="color:#88b898;font-size:1rem;max-width:600px;line-height:1.6;">
-        Sélectionne deux référentiels dans la barre latérale, configure les paramètres
+        Sélectionne deux référentiels ou plus dans la barre latérale, configure les paramètres
         et clique sur <strong style="color:#00e676;">Lancer le pipeline</strong> pour démarrer l'analyse.
       </p>
     </div>
     """, unsafe_allow_html=True)
 
-    frameworks = list_frameworks()
+    _all_fws = list_frameworks()
+    import itertools as _it
+    n_pairs_total = len(list(_it.combinations(_all_fws.keys(), 2)))
     st.markdown(f"""
     <div style="margin-bottom:8px;">
       <span style="font-family:'JetBrains Mono',monospace;font-size:0.75rem;color:#00e676;text-transform:uppercase;letter-spacing:0.1em;">
-        ◆ {len(frameworks)} référentiels disponibles
+        ◆ {len(_all_fws)} référentiels disponibles · {n_pairs_total} paires possibles
       </span>
     </div>
     <div class="fw-grid">
-      {"".join(f'<div class="fw-chip">{name}</div>' for name in sorted(frameworks.keys()))}
+      {"".join(f'<div class="fw-chip">{name}</div>' for name in sorted(_all_fws.keys()))}
     </div>
     """, unsafe_allow_html=True)
 
