@@ -150,10 +150,14 @@ class MappingRelation:
     coverage_B_to_A: float
     confidence: float
     relation_type: str   # "equivalence"|"A_couvre_B"|"B_couvre_A"|"partielle"|"aucun_lien"
-    justification: str = ""  # Explication courte du LLM (max 2 phrases)
+    justification: str = ""
+    framework_A: str = ""   # clé canonique du framework source (ex. "CIS_v8")
+    framework_B: str = ""   # clé canonique du framework cible (ex. "ISO_27001")
 
     def to_dict(self) -> dict:
         return {
+            "framework_A":     self.framework_A,
+            "framework_B":     self.framework_B,
             "id_A":            self.id_A,
             "title_A":         self.title_A,
             "id_B":            self.id_B,
@@ -718,7 +722,7 @@ def _load_or_parse(
     print(f"  [parse] {Path(source_path).name} ...")
     requirements = loader(source_path)
     _save_json(requirements, cache_path)
-    print(f"  [ok]    {len(requirements)} exigences → {cache_path.name}")
+    print(f"  [ok]    {len(requirements)} exigences -> {cache_path.name}")
     return requirements
 
 
@@ -735,6 +739,33 @@ def run_ingestion(
     _validate_ingestion(Path(path_B).stem, ref_B)
     print(f"[Étape 1] Ref A : {len(ref_A)} exigences  |  Ref B : {len(ref_B)} exigences")
     return ref_A, ref_B
+
+
+def run_ingestion_all(
+    paths: list[str],
+    force: bool = False,
+) -> dict[str, list[RequirementNormalized]]:
+    """Charge N référentiels en un seul appel.
+
+    Args:
+        paths: liste de chemins YAML à charger.
+        force: si True, re-parse même si le cache existe.
+
+    Returns:
+        dict {fw_key: [RequirementNormalized, ...]} — une entrée par référentiel.
+    """
+    print(f"[Étape 1] Chargement de {len(paths)} référentiels ...")
+    frameworks: dict[str, list[RequirementNormalized]] = {}
+    for path in paths:
+        fw_key = _name_from_path(Path(path))
+        cache  = DATA_DIR / f"{re.sub(r'[^a-z0-9]', '_', fw_key.lower())}_normalized.json"
+        reqs   = _load_or_parse(path, load_generic_yaml, cache, force)
+        _validate_ingestion(Path(path).stem, reqs)
+        frameworks[fw_key] = reqs
+        print(f"  {fw_key:30s} : {len(reqs)} exigences")
+    total = sum(len(v) for v in frameworks.values())
+    print(f"[Étape 1] {len(frameworks)} référentiels — {total} exigences au total")
+    return frameworks
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -866,8 +897,72 @@ def run_similarity(
 
     total = len(ref_A) * len(ref_B)
     print(f"  {len(pairs)} paires candidates retenues (seuil={semantic_threshold}, top_k={top_k}).")
-    print(f"  Réduction : {total} combinaisons → {len(pairs)} paires ({100 * len(pairs) / total:.1f}%)")
+    print(f"  Reduction : {total} combinaisons -> {len(pairs)} paires ({100 * len(pairs) / total:.1f}%)")
     return pairs, matrix
+
+
+def run_similarity_all(
+    frameworks: dict[str, list[RequirementNormalized]],
+    force: bool = False,
+    semantic_threshold: float = SEMANTIC_THRESHOLD,
+    top_k: int = TOP_K,
+) -> tuple[dict[tuple[str, str], list[CandidatePair]], dict[tuple[str, str], np.ndarray]]:
+    """Encode toutes les exigences en UN seul passage, puis calcule les similarités
+    pour chaque paire (fw_i, fw_j) avec i < j.
+
+    Returns:
+        candidates_all : dict[(fw_i, fw_j), list[CandidatePair]]
+        matrices_all   : dict[(fw_i, fw_j), np.ndarray]
+    """
+    from itertools import combinations
+
+    fw_keys = list(frameworks.keys())
+    print(f"[Étape 2] Encodage global — {sum(len(v) for v in frameworks.values())} exigences "
+          f"sur {len(fw_keys)} référentiels ...")
+
+    model = _get_embedding_model()
+
+    # Un seul encode() pour tout — embeddings indexés par fw_key
+    emb_by_fw: dict[str, np.ndarray] = {}
+    for fw_key, reqs in frameworks.items():
+        raw = model.encode([_req_text(r) for r in reqs],
+                           batch_size=256, show_progress_bar=False, convert_to_numpy=True)
+        norms = np.linalg.norm(raw, axis=1, keepdims=True)
+        emb_by_fw[fw_key] = raw / np.where(norms == 0, 1, norms)
+
+    candidates_all: dict[tuple[str, str], list[CandidatePair]] = {}
+    matrices_all:   dict[tuple[str, str], np.ndarray]          = {}
+
+    pairs_iter = list(combinations(fw_keys, 2))
+    print(f"  {len(pairs_iter)} paires à traiter ...")
+
+    for fw_i, fw_j in pairs_iter:
+        slug         = _cache_slug(fw_i, fw_j)
+        cache_pairs  = DATA_DIR / f"candidate_pairs_{slug}.json"
+        cache_matrix = DATA_DIR / f"similarity_matrix_{slug}.npy"
+
+        if cache_pairs.exists() and cache_matrix.exists() and not force:
+            candidates_all[(fw_i, fw_j)] = _load_pairs(cache_pairs)
+            matrices_all[(fw_i, fw_j)]   = np.load(str(cache_matrix))
+            print(f"  [{fw_i} <-> {fw_j}] cache -- {len(candidates_all[(fw_i, fw_j)])} paires")
+            continue
+
+        matrix = emb_by_fw[fw_i] @ emb_by_fw[fw_j].T
+        pairs  = _select_pairs(frameworks[fw_i], frameworks[fw_j], matrix,
+                                semantic_threshold, top_k)
+        np.save(str(cache_matrix), matrix)
+        _save_pairs(pairs, cache_pairs)
+
+        total_comb = len(frameworks[fw_i]) * len(frameworks[fw_j])
+        print(f"  [{fw_i} <-> {fw_j}] {len(pairs)}/{total_comb} paires "
+              f"({100 * len(pairs) / max(total_comb, 1):.1f}%)")
+
+        candidates_all[(fw_i, fw_j)] = pairs
+        matrices_all[(fw_i, fw_j)]   = matrix
+
+    total_pairs = sum(len(v) for v in candidates_all.values())
+    print(f"[Étape 2] Total : {total_pairs} paires candidates sur {len(pairs_iter)} combinaisons")
+    return candidates_all, matrices_all
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -912,8 +1007,26 @@ def run_heatmap(
     if not show:
         plt.close(fig)
 
-    print(f"[Étape 3] Heatmap sauvegardée → {out}")
+    print(f"[Etape 3] Heatmap sauvegardee -> {out}")
     return out
+
+
+def run_heatmaps_all(
+    frameworks: dict[str, list[RequirementNormalized]],
+    matrices_all: dict[tuple[str, str], np.ndarray],
+    show: bool = False,
+) -> list[Path]:
+    """Génère une heatmap pour chaque paire (fw_i, fw_j)."""
+    paths = []
+    for (fw_i, fw_j), matrix in matrices_all.items():
+        slug = _cache_slug(fw_i, fw_j)
+        out  = OUTPUT_DIR / f"heatmap_{slug}.png"
+        # Titres d'axes avec le nom du framework
+        ref_i = frameworks[fw_i]
+        ref_j = frameworks[fw_j]
+        path  = run_heatmap(ref_i, ref_j, matrix, output_path=out, show=show)
+        paths.append(path)
+    return paths
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1464,16 +1577,181 @@ function updateStats() {{
     print(f"  → {output_path}")
 
 
+def run_scorer_all(
+    candidates_all: dict[tuple[str, str], list[CandidatePair]],
+    frameworks: dict[str, list[RequirementNormalized]],
+    force: bool = False,
+    llm_model: str = LLM_MODEL,
+    batch_size: int = LLM_BATCH_SIZE,
+) -> dict[tuple[str, str], list[MappingRelation]]:
+    """Scorage LLM pour toutes les paires (fw_i, fw_j).
+
+    Injecte framework_A et framework_B dans chaque MappingRelation produite.
+    Cache par paire dans OUTPUT_DIR/mapping_relations_{slug}.json.
+    """
+    relations_all: dict[tuple[str, str], list[MappingRelation]] = {}
+
+    for (fw_i, fw_j), candidates in candidates_all.items():
+        slug      = _cache_slug(fw_i, fw_j)
+        cache_rel = OUTPUT_DIR / f"mapping_relations_{slug}.json"
+        print(f"\n[Etape 4] {fw_i} <-> {fw_j} -- {len(candidates)} paires candidates ...")
+
+        rels = run_scorer(
+            candidates,
+            frameworks[fw_i],
+            frameworks[fw_j],
+            force=force,
+            llm_model=llm_model,
+            batch_size=batch_size,
+            cache_path=cache_rel,
+        )
+        # Injecter framework_A / framework_B
+        for r in rels:
+            r.framework_A = fw_i
+            r.framework_B = fw_j
+
+        relations_all[(fw_i, fw_j)] = rels
+
+    total = sum(len(v) for v in relations_all.values())
+    print(f"\n[Étape 4] Total : {total} relations sur {len(relations_all)} paires")
+    return relations_all
+
+
+def run_cleanup_all(
+    relations_all: dict[tuple[str, str], list[MappingRelation]],
+    min_confidence: float = LLM_MIN_CONFIDENCE,
+) -> tuple[dict[tuple[str, str], list[MappingRelation]], list[MappingRelation]]:
+    """Nettoyage pour toutes les paires. Retourne (clean_all, removed_flat)."""
+    clean_all: dict[tuple[str, str], list[MappingRelation]] = {}
+    removed_flat: list[MappingRelation] = []
+    for pair, rels in relations_all.items():
+        clean, removed = run_cleanup(rels, min_confidence=min_confidence)
+        clean_all[pair] = clean
+        removed_flat.extend(removed)
+    return clean_all, removed_flat
+
+
+def _export_global(
+    relations_all: dict[tuple[str, str], list[MappingRelation]],
+    removed_flat: list[MappingRelation] | None = None,
+) -> None:
+    """Exporte l'ensemble des relations (toutes paires confondues).
+
+    Produit :
+    - data/outputs/mapping_all.json        (toutes relations, auto-suffisant avec framework_A/B)
+    - data/outputs/mapping_summary.xlsx    (1 feuille par paire + feuille "Global")
+    - data/outputs/mapping_all.html        (revue interactive)
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    all_relations = [r for rels in relations_all.values() for r in rels]
+
+    # ── JSON global ──────────────────────────────────────────────────────────
+    json_path = OUTPUT_DIR / "mapping_all.json"
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump([r.to_dict() for r in all_relations], f, ensure_ascii=False, indent=2)
+    print(f"[Export] JSON global -> {json_path} ({len(all_relations)} relations)")
+
+    # ── HTML revue ───────────────────────────────────────────────────────────
+    html_path = OUTPUT_DIR / "mapping_all.html"
+    _export_html_review(all_relations, html_path)
+
+    # ── Excel multi-feuilles ─────────────────────────────────────────────────
+    try:
+        wb = Workbook()
+        wb.remove(wb.active)  # supprimer la feuille vide par défaut
+
+        thin   = Side(style="thin", color="CCCCCC")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        RELATION_COLORS = {
+            "equivalence": "C6EFCE",
+            "A_couvre_B":  "FFEB9C",
+            "B_couvre_A":  "FFEB9C",
+            "partielle":   "FFDDC1",
+            "aucun_lien":  "FFC7CE",
+        }
+        HEADERS = [
+            "Framework A", "ID Ref A", "Titre Ref A",
+            "Framework B", "ID Ref B", "Titre Ref B",
+            "Score sémantique", "Coverage A→B", "Coverage B→A",
+            "Confiance", "Type de relation", "Justification",
+        ]
+
+        def _write_sheet(ws, relations_list: list[MappingRelation]) -> None:
+            hdr_fill = PatternFill("solid", fgColor="1F4E79")
+            hdr_font = Font(bold=True, color="FFFFFF")
+            for col, h in enumerate(HEADERS, 1):
+                cell = ws.cell(row=1, column=col, value=h)
+                cell.fill = hdr_fill
+                cell.font = hdr_font
+                cell.alignment = Alignment(horizontal="center", wrap_text=True)
+                cell.border = border
+            for row_idx, r in enumerate(relations_list, 2):
+                vals = [
+                    r.framework_A, r.id_A, r.title_A,
+                    r.framework_B, r.id_B, r.title_B,
+                    r.semantic_score, r.coverage_A_to_B, r.coverage_B_to_A,
+                    r.confidence, r.relation_type, r.justification,
+                ]
+                row_fill = PatternFill("solid", fgColor=RELATION_COLORS.get(r.relation_type, "FFFFFF"))
+                for col_idx, val in enumerate(vals, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                    cell.border = border
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+                    if col_idx in (7, 8, 9, 10):
+                        cell.number_format = "0.00"
+                    if col_idx == 11:
+                        cell.fill = row_fill
+            col_widths = [18, 12, 45, 18, 12, 45, 12, 12, 12, 10, 18, 60]
+            for i, w in enumerate(col_widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = w
+            ws.freeze_panes    = "A2"
+            ws.auto_filter.ref = ws.dimensions
+
+        # Feuille par paire
+        for (fw_i, fw_j), rels in relations_all.items():
+            sheet_name = f"{fw_i[:12]} {fw_j[:12]}"[:31]  # Excel: max 31 chars
+            _write_sheet(wb.create_sheet(sheet_name), rels)
+
+        # Feuille globale
+        _write_sheet(wb.create_sheet("Global"), all_relations)
+
+        # Feuille Supprimées
+        if removed_flat:
+            _write_sheet(wb.create_sheet("Supprimées"), removed_flat)
+
+        xlsx_path = OUTPUT_DIR / "mapping_summary.xlsx"
+        wb.save(str(xlsx_path))
+        print(f"[Export] Excel global -> {xlsx_path}")
+    except Exception as e:
+        print(f"  [WARN] Export Excel global échoué : {e}")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Pipeline principal
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    SURVEYS_DIR = Path(__file__).parent / "files" / "surveys"
+
     parser = argparse.ArgumentParser(description="Pipeline de mapping référentiels (standalone)")
-    parser.add_argument("--ref-a",         required=True, help="Chemin vers le fichier Ref A (YAML)")
-    parser.add_argument("--adapter-a",     default="generic", help="Adaptateur Ref A (seul disponible : generic)")
-    parser.add_argument("--ref-b",         required=True, help="Chemin vers le fichier Ref B (YAML)")
-    parser.add_argument("--adapter-b",     default="generic", help="Adaptateur Ref B (seul disponible : generic)")
+
+    # Mode N-frameworks (nouveau)
+    parser.add_argument("--frameworks", nargs="+", metavar="YAML",
+                        help="Chemins vers N fichiers YAML (mode multi-frameworks)")
+    parser.add_argument("--all", dest="all_frameworks", action="store_true",
+                        help=f"Scanner tous les YAML dans {SURVEYS_DIR}")
+
+    # Mode pairwise (rétrocompatibilité)
+    parser.add_argument("--ref-a",         default=None, help="Chemin vers le fichier Ref A (YAML)")
+    parser.add_argument("--adapter-a",     default="generic")
+    parser.add_argument("--ref-b",         default=None, help="Chemin vers le fichier Ref B (YAML)")
+    parser.add_argument("--adapter-b",     default="generic")
+
+    # Communs
     parser.add_argument("--force-step1",   action="store_true")
     parser.add_argument("--force-step2",   action="store_true")
     parser.add_argument("--force-step4",   action="store_true")
@@ -1483,6 +1761,63 @@ def main():
                         help=f"Confiance minimale pour conserver une relation (défaut: {LLM_MIN_CONFIDENCE})")
     args = parser.parse_args()
 
+    # ── Résoudre la liste de frameworks ──────────────────────────────────────
+    if args.all_frameworks:
+        yaml_paths = sorted(SURVEYS_DIR.glob("*.yaml")) + sorted(SURVEYS_DIR.glob("*.yml"))
+        if not yaml_paths:
+            sys.exit(f"Aucun fichier YAML trouvé dans {SURVEYS_DIR}")
+        print(f"[Pipeline] Mode --all : {len(yaml_paths)} référentiels détectés")
+    elif args.frameworks:
+        yaml_paths = [Path(p) for p in args.frameworks]
+    elif args.ref_a and args.ref_b:
+        yaml_paths = None  # mode pairwise classique
+    else:
+        parser.error("Spécifiez --frameworks, --all, ou --ref-a/--ref-b")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Mode N-frameworks
+    # ══════════════════════════════════════════════════════════════════════════
+    if yaml_paths is not None:
+        # ── Étape 1 ──────────────────────────────────────────────────────────
+        frameworks = run_ingestion_all(yaml_paths, force=args.force_step1)
+        if len(frameworks) < 2:
+            sys.exit("Il faut au moins 2 référentiels valides pour faire un mapping.")
+
+        # ── Étape 2 ──────────────────────────────────────────────────────────
+        candidates_all, matrices_all = run_similarity_all(
+            frameworks, force=args.force_step2
+        )
+
+        # ── Étape 3 ──────────────────────────────────────────────────────────
+        run_heatmaps_all(frameworks, matrices_all, show=False)
+
+        if args.skip_step4:
+            print("\n[Pipeline] Étape 4 ignorée (--skip-step4). Pipeline terminé.")
+            return
+
+        # ── Étape 4 ──────────────────────────────────────────────────────────
+        relations_all = run_scorer_all(
+            candidates_all, frameworks, force=args.force_step4
+        )
+
+        # ── Étape 5 ──────────────────────────────────────────────────────────
+        removed_flat: list[MappingRelation] = []
+        if not args.skip_step5:
+            relations_all, removed_flat = run_cleanup_all(
+                relations_all, min_confidence=args.min_confidence
+            )
+
+        # ── Export global ─────────────────────────────────────────────────────
+        _export_global(relations_all, removed_flat=removed_flat or None)
+
+        total = sum(len(v) for v in relations_all.values())
+        print(f"\n[Pipeline] Terminé — {total} relations exportées "
+              f"({len(removed_flat)} supprimées) sur {len(relations_all)} paires.")
+        return
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Mode pairwise (rétrocompatibilité --ref-a / --ref-b)
+    # ══════════════════════════════════════════════════════════════════════════
     loader_a = ADAPTER_LOADERS.get(args.adapter_a)
     loader_b = ADAPTER_LOADERS.get(args.adapter_b)
     if loader_a is None:
