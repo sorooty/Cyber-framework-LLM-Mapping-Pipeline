@@ -755,15 +755,34 @@ def _cache_slug(fw_a: str, fw_b: str) -> str:
 
 def _get_embedding_model() -> SentenceTransformer:
     if not hasattr(_get_embedding_model, "_model"):
-        _get_embedding_model._model = SentenceTransformer(EMBEDDING_MODEL)
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+        except ImportError:
+            device = "cpu"
+        print(f"  Chargement du modèle d'embedding ({EMBEDDING_MODEL}) sur {device.upper()}...")
+        _get_embedding_model._model = SentenceTransformer(EMBEDDING_MODEL, device=device)
     return _get_embedding_model._model
 
 
 def _req_text(r: RequirementNormalized) -> str:
-    """Texte pour l'embedding : titre + début de description si disponible."""
-    if r.description:
-        return f"{r.title}. {r.description[:200]}"
-    return r.title
+    """Texte pour l'embedding : contexte parent (tags) | titre: description.
+    
+    Inspiré de CISO Assistant sbert_mapper: agrège le contexte hiérarchique
+    pour réduire les faux négatifs sur vocabulaire divergent.
+    """
+    parts = []
+    if r.tags:
+        parts.append(r.tags[-1])  # contexte du parent immédiat
+    first_sentence = r.description.split(".")[0].strip()[:200] if r.description else ""
+    content = f"{r.title}: {first_sentence}" if first_sentence else r.title
+    parts.append(content)
+    return " | ".join(parts)
 
 
 def _select_pairs(
@@ -1210,6 +1229,8 @@ def _export_results(
         out = xlsx_path or OUTPUT_DIR / "mapping_results.xlsx"
         wb.save(str(out))
         print(f"  → {out}")
+        html_out = out.with_suffix(".html")
+        _export_html_review(relations, html_out)
 
     except Exception as e:
         print(f"  [WARN] Export Excel échoué : {e}")
@@ -1282,6 +1303,165 @@ def run_cleanup(
     print(f"[Étape 5] Nettoyage : {len(clean)} relations conservées, {len(removed)} supprimées "
           f"(aucun_lien ou confiance < {min_confidence:.2f})")
     return clean, removed
+
+
+def _favor_equivalence_filter(
+    relations: list[MappingRelation],
+) -> list[MappingRelation]:
+    """Pour chaque id_A, si des équivalences existent, ne garder qu'elles.
+
+    Inspiré de CISO Assistant favor_equals_filter : réduit le bruit en
+    priorisant les correspondances fortes quand elles existent.
+    """
+    from collections import defaultdict
+    by_source: dict[str, list[MappingRelation]] = defaultdict(list)
+    for r in relations:
+        by_source[r.id_A].append(r)
+    result = []
+    for rels in by_source.values():
+        equiv = [r for r in rels if r.relation_type == "equivalence"]
+        result.extend(equiv if equiv else rels)
+    return result
+
+
+def _export_html_review(
+    relations: list[MappingRelation],
+    output_path: Path,
+) -> None:
+    """Génère un fichier HTML interactif pour la revue humaine des mappings.
+
+    Inspiré de CISO Assistant prepare_review.py : checkboxes de validation,
+    barre de progression, persistance localStorage, couleurs par type de relation.
+    """
+    RELATION_CSS = {
+        "equivalence": "#27ae60",
+        "A_couvre_B":  "#3498db",
+        "B_couvre_A":  "#e67e22",
+        "partielle":   "#f39c12",
+        "aucun_lien":  "#95a5a6",
+    }
+
+    import html as _html
+
+    rows_html = []
+    for idx, r in enumerate(relations):
+        color = RELATION_CSS.get(r.relation_type, "#999")
+        e_id_a   = _html.escape(r.id_A)
+        e_title_a = _html.escape(r.title_A)
+        e_rel    = _html.escape(r.relation_type)
+        e_id_b   = _html.escape(r.id_B)
+        e_title_b = _html.escape(r.title_B)
+        e_just   = _html.escape(r.justification or "")
+        rows_html.append(f"""
+        <tr>
+          <td class="ref-id">{e_id_a}</td>
+          <td class="desc">{e_title_a}</td>
+          <td><span class="badge" style="background:{color}">{e_rel}</span><br>
+              <small style="color:#666">{r.semantic_score:.2f} → {r.coverage_A_to_B:.2f}/{r.coverage_B_to_A:.2f}</small></td>
+          <td class="ref-id">{e_id_b}</td>
+          <td class="desc">{e_title_b}</td>
+          <td class="desc" style="font-style:italic;color:#555">{e_just}</td>
+          <td style="text-align:center"><input type="checkbox" id="cb_{idx}" onchange="updateStats()"></td>
+        </tr>""")
+
+    rows_joined = "\n".join(rows_html)
+    total = len(relations)
+
+    html = f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>RiskHunter — Mapping Review</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f6f8; padding: 20px; color: #333; }}
+  .container {{ max-width: 1600px; margin: 0 auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); padding: 30px; }}
+  h1 {{ color: #1a2e4a; margin-bottom: 8px; }}
+  .subtitle {{ color: #666; font-size: .9em; margin-bottom: 20px; }}
+  .progress-wrap {{ background: #e0e0e0; border-radius: 4px; height: 28px; overflow: hidden; margin-bottom: 20px; }}
+  .progress-bar {{ height: 100%; background: linear-gradient(90deg,#3498db,#27ae60); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; transition: width .3s; min-width: 40px; }}
+  .stats {{ display:flex; gap:16px; margin-bottom:20px; }}
+  .stat {{ flex:1; background:#f0f4f8; border-radius:6px; padding:12px; text-align:center; }}
+  .stat-val {{ font-size:2em; font-weight:700; color:#3498db; }}
+  .stat-lbl {{ font-size:.8em; color:#888; }}
+  table {{ width:100%; border-collapse:collapse; font-size:.85em; }}
+  thead {{ background:#1a2e4a; color:#fff; position:sticky; top:0; }}
+  th {{ padding:10px 8px; text-align:left; }}
+  td {{ padding:8px; border-bottom:1px solid #eee; vertical-align:top; }}
+  tr:hover {{ background:#fafafa; }}
+  tr.validated {{ background:#eafaf1; }}
+  .ref-id {{ font-family:monospace; font-weight:600; white-space:nowrap; }}
+  .desc {{ max-width:280px; line-height:1.4; }}
+  .badge {{ display:inline-block; padding:3px 8px; border-radius:4px; color:#fff; font-size:.8em; font-weight:600; }}
+  .legend {{ display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; }}
+  .legend-item {{ display:flex; align-items:center; gap:6px; font-size:.8em; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔍 RiskHunter — Mapping Review</h1>
+  <p class="subtitle">{total} relations à valider</p>
+
+  <div class="legend">
+    <span class="legend-item"><span class="badge" style="background:#27ae60">equivalence</span> Équivalence complète</span>
+    <span class="legend-item"><span class="badge" style="background:#3498db">A_couvre_B</span> A couvre B</span>
+    <span class="legend-item"><span class="badge" style="background:#e67e22">B_couvre_A</span> B couvre A</span>
+    <span class="legend-item"><span class="badge" style="background:#f39c12">partielle</span> Couverture partielle</span>
+    <span class="legend-item"><span class="badge" style="background:#95a5a6">aucun_lien</span> Aucun lien</span>
+  </div>
+
+  <div class="progress-wrap">
+    <div class="progress-bar" id="progressBar" style="width:0%">0%</div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-val">{total}</div><div class="stat-lbl">Total</div></div>
+    <div class="stat"><div class="stat-val" id="reviewedCount">0</div><div class="stat-lbl">Validées</div></div>
+    <div class="stat"><div class="stat-val" id="remainingCount">{total}</div><div class="stat-lbl">Restantes</div></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID A</th><th>Titre A</th><th>Relation</th>
+        <th>ID B</th><th>Titre B</th><th>Justification</th><th>✓</th>
+      </tr>
+    </thead>
+    <tbody>
+{rows_joined}
+    </tbody>
+  </table>
+</div>
+<script>
+window._rhReportKey = {repr(str(output_path.name))};
+function updateStats() {{
+  const cbs = document.querySelectorAll('input[type=checkbox]');
+  const total = cbs.length;
+  const done = Array.from(cbs).filter(c => c.checked).length;
+  document.getElementById('reviewedCount').textContent = done;
+  document.getElementById('remainingCount').textContent = total - done;
+  const pct = total ? Math.round(done / total * 100) : 0;
+  const bar = document.getElementById('progressBar');
+  bar.style.width = pct + '%';
+  bar.textContent = pct + '%';
+  cbs.forEach(cb => cb.closest('tr').classList.toggle('validated', cb.checked));
+  localStorage.setItem('rh_review_state_' + window._rhReportKey, JSON.stringify(Array.from(cbs).map(c => c.checked)));
+}}
+(function() {{
+  const saved = localStorage.getItem('rh_review_state_' + window._rhReportKey);
+  if (!saved) return;
+  const state = JSON.parse(saved);
+  const cbs = document.querySelectorAll('input[type=checkbox]');
+  state.forEach((v, i) => {{ if (cbs[i]) cbs[i].checked = v; }});
+  updateStats();
+}})();
+</script>
+</body>
+</html>"""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html, encoding="utf-8")
+    print(f"  → {output_path}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
