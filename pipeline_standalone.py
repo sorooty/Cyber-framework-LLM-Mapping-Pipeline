@@ -42,7 +42,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import dotenv
 import matplotlib.pyplot as plt
@@ -53,8 +53,9 @@ import yaml
 dotenv.load_dotenv()
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field, ValidationError
-from sentence_transformers import SentenceTransformer
+from pydantic import BaseModel, Field
+from sentence_transformers import SentenceTransformer, util as st_util
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Config
@@ -90,15 +91,15 @@ THRESHOLD_EQUIVALENCE = 0.85
 THRESHOLD_COVERAGE = 0.75
 
 # Cache versioning — bump when pipeline logic or data model changes
-CACHE_VERSION = "2"
+CACHE_VERSION = "3"
 
 # Module-level RELATION_COLORS (used in Excel + HTML exports)
 RELATION_COLORS: dict[str, str] = {
     "equivalence": "C6EFCE",
-    "A_couvre_B":  "FFEB9C",
-    "B_couvre_A":  "FFEB9C",
-    "partielle":   "FFDDC1",
-    "aucun_lien":  "FFC7CE",
+    "A_covers_B":  "FFEB9C",
+    "B_covers_A":  "FFEB9C",
+    "partial":     "FFDDC1",
+    "no_link":     "FFC7CE",
 }
 
 
@@ -164,7 +165,7 @@ class MappingRelation:
     coverage_B_to_A: float
     confidence: float
     relation_type: (
-        str  # "equivalence"|"A_couvre_B"|"B_couvre_A"|"partielle"|"aucun_lien"
+        str  # "equivalence"|"A_covers_B"|"B_covers_A"|"partial"|"no_link"
     )
     justification: str = ""
     framework_A: str = ""  # clé canonique du framework source (ex. "CIS_v8")
@@ -191,16 +192,16 @@ class MappingRelation:
 
 
 def _infer_relation_type(cov_a: float, cov_b: float) -> str:
-    """Dérive relation_type depuis les scores de coverage."""
+    """Derives relation_type from coverage scores."""
     if cov_a >= THRESHOLD_EQUIVALENCE and cov_b >= THRESHOLD_EQUIVALENCE:
         return "equivalence"
     if cov_a >= THRESHOLD_COVERAGE and cov_b < THRESHOLD_COVERAGE:
-        return "A_couvre_B"
+        return "A_covers_B"
     if cov_b >= THRESHOLD_COVERAGE and cov_a < THRESHOLD_COVERAGE:
-        return "B_couvre_A"
+        return "B_covers_A"
     if cov_a >= 0.4 or cov_b >= 0.4:
-        return "partielle"
-    return "aucun_lien"
+        return "partial"
+    return "no_link"
 
 
 @functools.lru_cache(maxsize=1)
@@ -569,7 +570,7 @@ class FrameworkSchema:
         return result
 
     def section_count(
-        self, section: Union[int, str], subsection: Union[int, str, None] = None
+        self, section: int | str, subsection: int | str | None = None
     ) -> int:
         sec = self.groups.get(section) or self.groups.get(str(section))
         if sec is None:
@@ -580,11 +581,11 @@ class FrameworkSchema:
             return sec.get(subsection, 0) or sec.get(str(subsection), 0)
         return sum(n for n in sec.values() if isinstance(n, int))
 
-    def effective_section_id(self, section_key: Union[int, str]) -> Union[int, str]:
+    def effective_section_id(self, section_key: int | str) -> int | str:
         int_key = int(section_key) if str(section_key).isdigit() else section_key
         return self.overwrite_ids.get(int_key, int_key)
 
-    def is_flat(self, section_key: Union[int, str]) -> bool:
+    def is_flat(self, section_key: int | str) -> bool:
         return str(section_key) in self.flat_groups
 
     def _iter_counts(self):
@@ -807,29 +808,33 @@ def get_expected_count(framework_name: str) -> "int | None":
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _save_json(requirements: list[RequirementNormalized], path: Path) -> None:
+def _save_cache(data: list[dict], path: Path) -> None:
+    """Save a versioned JSON cache file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(
-            {"_v": CACHE_VERSION, "data": [r.to_dict() for r in requirements]},
-            f, ensure_ascii=False, indent=2,
-        )
+        json.dump({"_v": CACHE_VERSION, "data": data}, f, ensure_ascii=False, indent=2)
 
 
-def _load_json_requirements(path: Path) -> list[RequirementNormalized]:
-    with open(path, "r", encoding="utf-8") as f:
+def _load_cache(path: Path) -> list[dict]:
+    """Load a versioned JSON cache file. Raises ValueError on version mismatch."""
+    with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     if isinstance(raw, dict):
         if raw.get("_v") != CACHE_VERSION:
             raise ValueError(
-                f"Cache version mismatch in {path.name}: "
-                f"got {raw.get('_v')!r}, expected {CACHE_VERSION!r}. "
-                f"Run with --force-step1 to rebuild."
+                f"Cache outdated in {path.name} "
+                f"(v{raw.get('_v')} → v{CACHE_VERSION}). Re-run with --force-step1/2/4."
             )
-        items = raw["data"]
-    else:
-        items = raw  # legacy format (plain list)
-    return [RequirementNormalized.from_dict(d) for d in items]
+        return raw["data"]
+    return raw  # legacy plain-list format
+
+
+def _save_json(requirements: list[RequirementNormalized], path: Path) -> None:
+    _save_cache([r.to_dict() for r in requirements], path)
+
+
+def _load_json_requirements(path: Path) -> list[RequirementNormalized]:
+    return [RequirementNormalized.from_dict(d) for d in _load_cache(path)]
 
 
 def _validate_ingestion(
@@ -866,12 +871,15 @@ def _load_or_parse(
     force: bool,
 ) -> list[RequirementNormalized]:
     if cache_path.exists() and not force:
-        print(f"  [cache] {cache_path.name}")
-        return _load_json_requirements(cache_path)
+        try:
+            print(f"  [cache] {cache_path.name}")
+            return _load_json_requirements(cache_path)
+        except ValueError as e:
+            print(f"  [cache outdated] {e} — reparsing...")
     print(f"  [parse] {Path(source_path).name} ...")
     requirements = loader(source_path)
     _save_json(requirements, cache_path)
-    print(f"  [ok]    {len(requirements)} exigences -> {cache_path.name}")
+    print(f"  [ok]    {len(requirements)} requirements → {cache_path.name}")
     return requirements
 
 
@@ -1031,30 +1039,11 @@ def _select_pairs(
 
 
 def _save_pairs(pairs: list[CandidatePair], path: Path | None = None) -> None:
-    out = path or CACHE_PAIRS
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(
-            {"_v": CACHE_VERSION, "data": [p.to_dict() for p in pairs]},
-            f, ensure_ascii=False, indent=2,
-        )
+    _save_cache([p.to_dict() for p in pairs], path or CACHE_PAIRS)
 
 
 def _load_pairs(path: Path | None = None) -> list[CandidatePair]:
-    src = path or CACHE_PAIRS
-    with open(src, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-    if isinstance(raw, dict):
-        if raw.get("_v") != CACHE_VERSION:
-            raise ValueError(
-                f"Cache version mismatch in {src.name}: "
-                f"got {raw.get('_v')!r}, expected {CACHE_VERSION!r}. "
-                f"Run with --force-step2 to rebuild."
-            )
-        items = raw["data"]
-    else:
-        items = raw  # legacy format
-    return [CandidatePair(**d) for d in items]
+    return [CandidatePair(**d) for d in _load_cache(path or CACHE_PAIRS)]
 
 
 def run_similarity(
@@ -1071,11 +1060,14 @@ def run_similarity(
     cache_matrix = DATA_DIR / f"similarity_matrix_{slug}.npy"
 
     if cache_pairs.exists() and _matrix_cache_valid(cache_matrix) and not force:
-        print("[Étape 2] Cache trouvé — rechargement des paires candidates.")
-        pairs = _load_pairs(cache_pairs)
-        matrix = np.load(str(cache_matrix))
-        print(f"  {len(pairs)} paires candidates chargées depuis le cache.")
-        return pairs, matrix
+        try:
+            print("[Step 2] Cache found — reloading candidate pairs.")
+            pairs = _load_pairs(cache_pairs)
+            matrix = np.load(str(cache_matrix))
+            print(f"  {len(pairs)} candidate pairs loaded from cache.")
+            return pairs, matrix
+        except (ValueError, Exception) as e:
+            print(f"  [cache invalid] {e} — recomputing...")
 
     print(
         f"[Étape 2] Encodage de {len(ref_A)} + {len(ref_B)} textes avec '{EMBEDDING_MODEL}' ..."
@@ -1089,10 +1081,7 @@ def run_similarity(
         [_req_text(r) for r in ref_B], show_progress_bar=True, convert_to_numpy=True
     )
 
-    emb_A = emb_A / np.linalg.norm(emb_A, axis=1, keepdims=True)
-    emb_B = emb_B / np.linalg.norm(emb_B, axis=1, keepdims=True)
-
-    matrix = emb_A @ emb_B.T
+    matrix = st_util.cos_sim(emb_A, emb_B).numpy()
     pairs = _select_pairs(ref_A, ref_B, matrix, semantic_threshold, top_k)
 
     _save_matrix_cache(matrix, cache_matrix)
@@ -1136,16 +1125,19 @@ def run_similarity_all(
             for fw_i, fw_j in pairs_iter
         )
         if all_cached:
-            candidates_all: dict[tuple[str, str], list[CandidatePair]] = {}
-            matrices_all: dict[tuple[str, str], np.ndarray] = {}
-            for fw_i, fw_j in pairs_iter:
-                slug = _cache_slug(fw_i, fw_j)
-                candidates_all[(fw_i, fw_j)] = _load_pairs(DATA_DIR / f"candidate_pairs_{slug}.json")
-                matrices_all[(fw_i, fw_j)] = np.load(str(DATA_DIR / f"similarity_matrix_{slug}.npy"))
-                print(f"  [{fw_i} <-> {fw_j}] cache — {len(candidates_all[(fw_i, fw_j)])} paires")
-            total_pairs = sum(len(v) for v in candidates_all.values())
-            print(f"[Étape 2] Total : {total_pairs} paires candidates (depuis cache)")
-            return candidates_all, matrices_all
+            try:
+                candidates_all: dict[tuple[str, str], list[CandidatePair]] = {}
+                matrices_all: dict[tuple[str, str], np.ndarray] = {}
+                for fw_i, fw_j in pairs_iter:
+                    slug = _cache_slug(fw_i, fw_j)
+                    candidates_all[(fw_i, fw_j)] = _load_pairs(DATA_DIR / f"candidate_pairs_{slug}.json")
+                    matrices_all[(fw_i, fw_j)] = np.load(str(DATA_DIR / f"similarity_matrix_{slug}.npy"))
+                    print(f"  [{fw_i} <-> {fw_j}] cache — {len(candidates_all[(fw_i, fw_j)])} pairs")
+                total_pairs = sum(len(v) for v in candidates_all.values())
+                print(f"[Step 2] Total: {total_pairs} candidate pairs (from cache)")
+                return candidates_all, matrices_all
+            except (ValueError, Exception) as e:
+                print(f"  [cache invalid] {e} — recomputing all pairs...")
 
     print(
         f"[Étape 2] Encodage global — {sum(len(v) for v in frameworks.values())} exigences "
@@ -1157,14 +1149,12 @@ def run_similarity_all(
     # Un seul encode() pour tout — embeddings indexés par fw_key
     emb_by_fw: dict[str, np.ndarray] = {}
     for fw_key, reqs in frameworks.items():
-        raw = model.encode(
+        emb_by_fw[fw_key] = model.encode(
             [_req_text(r) for r in reqs],
             batch_size=256,
             show_progress_bar=False,
             convert_to_numpy=True,
         )
-        norms = np.linalg.norm(raw, axis=1, keepdims=True)
-        emb_by_fw[fw_key] = raw / np.where(norms == 0, 1, norms)
 
     candidates_all = {}
     matrices_all = {}
@@ -1181,7 +1171,7 @@ def run_similarity_all(
             print(f"  [{fw_i} <-> {fw_j}] cache — {len(candidates_all[(fw_i, fw_j)])} paires")
             continue
 
-        matrix = emb_by_fw[fw_i] @ emb_by_fw[fw_j].T
+        matrix = st_util.cos_sim(emb_by_fw[fw_i], emb_by_fw[fw_j]).numpy()
         pairs = _select_pairs(
             frameworks[fw_i], frameworks[fw_j], matrix, semantic_threshold, top_k
         )
@@ -1284,101 +1274,95 @@ class LLMScoringOutput(BaseModel):
     coverage_B_to_A: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     relation_type: Literal[
-        "equivalence", "A_couvre_B", "B_couvre_A", "partielle", "aucun_lien"
+        "equivalence", "A_covers_B", "B_covers_A", "partial", "no_link"
     ]
-    justification: str = Field(
-        default="", description="Explication courte du choix (1-2 phrases)"
-    )
+    justification: str = Field(default="", description="Short explanation of the scores (1–2 sentences)")
 
 
 class LLMBatchOutput(BaseModel):
     results: list[LLMScoringOutput]
 
 
-PROMPT_INSTRUCTIONS = f"""Tu es un expert en mapping de référentiels de cybersécurité et conformité (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
+PROMPT_INSTRUCTIONS = f"""Tu es un expert en mapping de référentiels de sécurité et conformité (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
 
 ## Définitions
 
 **coverage_A_to_B** (float 0.0–1.0) : proportion des objectifs de sécurité de B qui sont couverts ou satisfaits par A.
-- 1.0 = A adresse entièrement tous les objectifs de B
-- 0.8 = A couvre la majorité des objectifs de B, quelques lacunes mineures
+- 1.0 = A adresse intégralement tous les objectifs de B
+- 0.8 = A couvre la majorité des objectifs de B, lacunes mineures
 - 0.5 = A couvre environ la moitié des objectifs de B
-- 0.2 = A effleure le sujet de B mais ne le couvre pas vraiment
-- 0.0 = aucun rapport
+- 0.2 = A effleure le sujet de B sans vraiment le couvrir
+- 0.0 = aucune relation
 
-**coverage_B_to_A** : idem mais dans le sens B→A.
+**coverage_B_to_A** : même évaluation dans le sens B→A.
 
-**confidence** : ta certitude dans cette évaluation (0=incertain, 1=très certain).
+**confidence** : ta certitude dans cette évaluation (0 = incertain, 1 = très certain).
 
-**justification** : 1 à 2 phrases expliquant pourquoi tu as attribué ces scores et ce type de relation. Sois factuel et précis (ex : "A impose l'inventaire des actifs, B demande uniquement leur classification — A couvre donc B mais pas l'inverse.").
+**justification** : 1–2 phrases expliquant tes scores et le type de relation. Sois factuel et précis (ex. : « A exige un inventaire des actifs, B ne demande qu'une classification — A couvre B mais pas l'inverse. »).
 
-## Règles de classification relation_type
+## Règles de classification du relation_type
 
 | Condition | relation_type |
 |-----------|--------------|
 | coverage_A_to_B >= {THRESHOLD_EQUIVALENCE} ET coverage_B_to_A >= {THRESHOLD_EQUIVALENCE} | "equivalence" |
-| coverage_A_to_B >= {THRESHOLD_COVERAGE} ET coverage_B_to_A < {THRESHOLD_COVERAGE} | "A_couvre_B" |
-| coverage_B_to_A >= {THRESHOLD_COVERAGE} ET coverage_A_to_B < {THRESHOLD_COVERAGE} | "B_couvre_A" |
-| max(coverage_A_to_B, coverage_B_to_A) >= 0.4 | "partielle" |
-| sinon | "aucun_lien" |
+| coverage_A_to_B >= {THRESHOLD_COVERAGE} ET coverage_B_to_A < {THRESHOLD_COVERAGE} | "A_covers_B" |
+| coverage_B_to_A >= {THRESHOLD_COVERAGE} ET coverage_A_to_B < {THRESHOLD_COVERAGE} | "B_covers_A" |
+| max(coverage_A_to_B, coverage_B_to_A) >= 0.4 | "partial" |
+| sinon | "no_link" |
 
 ## Cas particuliers
 
 - Si les deux exigences sont **quasi-identiques** (même titre, même sujet) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95, justification="Les deux exigences adressent le même objectif de sécurité."
-- Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont proches sémantiquement."""
+- Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont sémantiquement proches."""
 
 
-def _make_pair_text(
-    idx: int, req_a: RequirementNormalized, req_b: RequirementNormalized
-) -> str:
+def _truncate(text: str, max_len: int = 300) -> str:
+    return text[:max_len] + "…" if len(text) > max_len else text
+
+
+def _make_pair_text(idx: int, req_a: RequirementNormalized, req_b: RequirementNormalized) -> str:
     tags_a = f" [{', '.join(req_a.tags[:3])}]" if req_a.tags else ""
     tags_b = f" [{', '.join(req_b.tags[:3])}]" if req_b.tags else ""
-    desc_a = (
-        (req_a.description[:300] + "…")
-        if len(req_a.description) > 300
-        else req_a.description
-    )
-    desc_b = (
-        (req_b.description[:300] + "…")
-        if len(req_b.description) > 300
-        else req_b.description
-    )
     return (
         f"--- Paire {idx} ---\n"
-        f"A ({req_a.framework}{tags_a}) : {req_a.title}\n"
-        f"{desc_a or '(description non disponible)'}\n\n"
-        f"B ({req_b.framework}{tags_b}) : {req_b.title}\n"
-        f"{desc_b or '(description non disponible)'}"
+        f"A ({req_a.framework}{tags_a}): {req_a.title}\n"
+        f"{_truncate(req_a.description) or '(no description)'}\n\n"
+        f"B ({req_b.framework}{tags_b}): {req_b.title}\n"
+        f"{_truncate(req_b.description) or '(no description)'}"
     )
 
 
-def _build_prompt(
-    pairs: list[tuple[RequirementNormalized, RequirementNormalized]],
-) -> str:
-    """Construit un prompt unique (instructions + données) pour 1 ou N paires."""
-    blocks = [_make_pair_text(i + 1, a, b) for i, (a, b) in enumerate(pairs)]
-    pairs_text = "\n\n".join(blocks)
-
-    if len(pairs) == 1:
-        return (
-            f"{PROMPT_INSTRUCTIONS}\n\n"
-            f"## Paire à évaluer\n\n"
-            f"{pairs_text}\n\n"
-            f"## Format de réponse\n\n"
-            f"Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown.\n"
-            f"Clés attendues : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."
-        )
+def _build_prompt(pairs: list[tuple[RequirementNormalized, RequirementNormalized]]) -> str:
+    """Build a single prompt (instructions + data) for 1 or N pairs."""
+    blocks = "\n\n".join(_make_pair_text(i + 1, a, b) for i, (a, b) in enumerate(pairs))
+    n = len(pairs)
+    header = f"## Paire à évaluer\n\n" if n == 1 else f"## Paires à évaluer ({n})\n\n"
+    if n == 1:
+        fmt = "Réponds UNIQUEMENT avec du JSON valide, sans commentaire ni markdown.\nClés attendues : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."
     else:
-        return (
-            f"{PROMPT_INSTRUCTIONS}\n\n"
-            f"## Paires à évaluer ({len(pairs)})\n\n"
-            f"{pairs_text}\n\n"
-            f"## Format de réponse\n\n"
-            f"Réponds UNIQUEMENT en JSON valide, sans commentaire, sans markdown.\n"
-            f'Format attendu : {{"results": [<scoring_paire_1>, ..., <scoring_paire_{len(pairs)}>]}}\n'
+        fmt = (
+            f'Réponds UNIQUEMENT avec du JSON valide, sans commentaire ni markdown.\n'
+            f'Format attendu : {{"results": [<scoring_paire_1>, ..., <scoring_paire_{n}>]}}\n'
             f"Chaque scoring_paire contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.\n"
-            f'Le tableau "results" doit contenir exactement {len(pairs)} éléments.'
+            f'Le tableau "results" DOIT contenir exactement {n} éléments.'
         )
+    return f"{PROMPT_INSTRUCTIONS}\n\n{header}{blocks}\n\n## Format de réponse\n\n{fmt}"
+
+
+@retry(
+    stop=stop_after_attempt(LLM_MAX_RETRIES + 1),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+    reraise=True,
+)
+async def _call_api(client: AsyncOpenAI, prompt: str, model: str) -> str:
+    """Call the OpenAI API with automatic exponential-backoff retry."""
+    response = await client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+    )
+    return response.choices[0].message.content
 
 
 async def _score_batch(
@@ -1387,53 +1371,29 @@ async def _score_batch(
     pairs: list[tuple[RequirementNormalized, RequirementNormalized]],
     llm_model: str,
 ) -> list[LLMScoringOutput | None]:
-    """Score un batch de paires en un seul appel API. Fallback 1-par-1 si parse échoue."""
+    """Score a batch of pairs in one API call. Falls back to 1-by-1 if parsing fails."""
     if not pairs:
         return []
-
     prompt = _build_prompt(pairs)
-
     async with semaphore:
-        for attempt in range(LLM_MAX_RETRIES + 1):
-            try:
-                response = await client.chat.completions.create(
-                    model=llm_model,
-                    response_format={"type": "json_object"},
-                    messages=[
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.0,
-                )
-                raw = response.choices[0].message.content
-
-                if len(pairs) == 1:
-                    result = LLMScoringOutput.model_validate_json(raw)
-                    return [result]
-
-                batch_out = LLMBatchOutput.model_validate_json(raw)
-                if len(batch_out.results) != len(pairs):
-                    raise ValueError(
-                        f"Batch: attendu {len(pairs)} résultats, reçu {len(batch_out.results)}"
-                    )
-                return batch_out.results
-
-            except Exception as e:
-                if attempt == LLM_MAX_RETRIES:
-                    if len(pairs) > 1:
-                        # Fallback : scorer 1 par 1
-                        print(
-                            f"  [LLM BATCH FALLBACK] {len(pairs)} paires → 1-par-1 ({e})"
-                        )
-                        results = []
-                        for a, b in pairs:
-                            r = await _score_batch(
-                                client, semaphore, [(a, b)], llm_model
-                            )
-                            results.append(r[0] if r else None)
-                        return results
-                    else:
-                        print(f"  [LLM ERREUR] {pairs[0][0].id}↔{pairs[0][1].id} : {e}")
-                        return [None]
+        try:
+            raw = await _call_api(client, prompt, llm_model)
+            if len(pairs) == 1:
+                return [LLMScoringOutput.model_validate_json(raw)]
+            batch_out = LLMBatchOutput.model_validate_json(raw)
+            if len(batch_out.results) != len(pairs):
+                raise ValueError(f"Expected {len(pairs)} results, got {len(batch_out.results)}")
+            return batch_out.results
+        except Exception as e:
+            if len(pairs) > 1:
+                print(f"  [LLM BATCH FALLBACK] {len(pairs)} pairs → 1-by-1 ({e})")
+                results = []
+                for a, b in pairs:
+                    r = await _score_batch(client, semaphore, [(a, b)], llm_model)
+                    results.append(r[0] if r else None)
+                return results
+            print(f"  [LLM ERROR] {pairs[0][0].id}↔{pairs[0][1].id}: {e}")
+            return [None]
 
 
 async def _run_scorer_async(
@@ -1528,117 +1488,81 @@ async def _run_scorer_async(
     return relations
 
 
+_XLSX_HEADERS = [
+    "Framework A", "ID A", "Title A",
+    "Framework B", "ID B", "Title B",
+    "Semantic Score", "Coverage A→B", "Coverage B→A", "Confidence",
+    "Relation Type", "Justification",
+]
+_XLSX_NUM_COLS = {7, 8, 9, 10}   # 1-based column indices for number format
+_XLSX_COLOR_COL = 11              # 1-based column index for relation_type color fill
+
+
+def _write_sheet(ws, relations: list) -> None:
+    """Write a formatted mapping sheet into an openpyxl worksheet."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    thin = Side(style="thin", color="CCCCCC")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    hdr_fill = PatternFill("solid", fgColor="1F4E79")
+    hdr_font = Font(bold=True, color="FFFFFF")
+
+    for col, h in enumerate(_XLSX_HEADERS, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = hdr_fill
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = border
+
+    for row_idx, r in enumerate(relations, 2):
+        vals = [
+            r.framework_A, r.id_A, r.title_A,
+            r.framework_B, r.id_B, r.title_B,
+            r.semantic_score, r.coverage_A_to_B, r.coverage_B_to_A, r.confidence,
+            r.relation_type, r.justification,
+        ]
+        row_fill = PatternFill("solid", fgColor=RELATION_COLORS.get(r.relation_type, "FFFFFF"))
+        for col_idx, val in enumerate(vals, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            cell.border = border
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            if col_idx in _XLSX_NUM_COLS:
+                cell.number_format = "0.00"
+            if col_idx == _XLSX_COLOR_COL:
+                cell.fill = row_fill
+
+    col_widths = [18, 12, 45, 18, 12, 45, 12, 12, 12, 10, 18, 60]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+
 def _export_results(
     relations: list[MappingRelation],
     removed: list[MappingRelation] | None = None,
     xlsx_path: Path | None = None,
 ) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    with open(CACHE_RELATIONS, "w", encoding="utf-8") as f:
-        json.dump([r.to_dict() for r in relations], f, ensure_ascii=False, indent=2)
+    _save_cache([r.to_dict() for r in relations], CACHE_RELATIONS)
     print(f"  → {CACHE_RELATIONS}")
 
     try:
         import openpyxl
-        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-        from openpyxl.utils import get_column_letter
-
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Mapping Results"
-
-        headers = [
-            "ID Ref A",
-            "Titre Ref A",
-            "ID Ref B",
-            "Titre Ref B",
-            "Score sémantique",
-            "Coverage A→B",
-            "Coverage B→A",
-            "Confiance",
-            "Type de relation",
-            "Justification",
-        ]
-        header_fill = PatternFill("solid", fgColor="1F4E79")
-        header_font = Font(bold=True, color="FFFFFF")
-        thin = Side(style="thin", color="CCCCCC")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-        for col, h in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col, value=h)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal="center", wrap_text=True)
-            cell.border = border
-
-        for row_idx, r in enumerate(relations, 2):
-            values = [
-                r.id_A,
-                r.title_A,
-                r.id_B,
-                r.title_B,
-                r.semantic_score,
-                r.coverage_A_to_B,
-                r.coverage_B_to_A,
-                r.confidence,
-                r.relation_type,
-                r.justification,
-            ]
-            row_fill = PatternFill(
-                "solid", fgColor=RELATION_COLORS.get(r.relation_type, "FFFFFF")
-            )
-            for col_idx, val in enumerate(values, 1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=val)
-                cell.border = border
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
-                if col_idx in (5, 6, 7, 8):
-                    cell.number_format = "0.00"
-                if col_idx == 9:
-                    cell.fill = row_fill
-
-        col_widths = [12, 50, 16, 50, 12, 12, 12, 10, 18, 60]
-        for i, w in enumerate(col_widths, 1):
-            ws.column_dimensions[get_column_letter(i)].width = w
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
-
-        # Feuille "Supprimées" (aucun_lien filtrés)
+        _write_sheet(ws, relations)
         if removed:
-            ws2 = wb.create_sheet("Supprimées")
-            for col, h in enumerate(headers, 1):
-                cell = ws2.cell(row=1, column=col, value=h)
-                cell.fill = PatternFill("solid", fgColor="808080")
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.border = border
-            for row_idx, r in enumerate(removed, 2):
-                values = [
-                    r.id_A,
-                    r.title_A,
-                    r.id_B,
-                    r.title_B,
-                    r.semantic_score,
-                    r.coverage_A_to_B,
-                    r.coverage_B_to_A,
-                    r.confidence,
-                    r.relation_type,
-                    r.justification,
-                ]
-                for col_idx, val in enumerate(values, 1):
-                    cell = ws2.cell(row=row_idx, column=col_idx, value=val)
-                    cell.border = border
-                    if col_idx in (5, 6, 7, 8):
-                        cell.number_format = "0.00"
-
+            ws2 = wb.create_sheet("Removed")
+            _write_sheet(ws2, removed)
         out = xlsx_path or OUTPUT_DIR / "mapping_results.xlsx"
         wb.save(str(out))
         print(f"  → {out}")
-        html_out = out.with_suffix(".html")
-        _export_html_review(relations, html_out)
-
+        _export_html_review(relations, out.with_suffix(".html"))
     except Exception as e:
-        print(f"  [WARN] Export Excel échoué : {e}")
+        print(f"  [WARN] Excel export failed: {e}")
 
 
 def run_scorer(
@@ -1652,21 +1576,18 @@ def run_scorer(
 ) -> list[MappingRelation]:
     _cache = cache_path or CACHE_RELATIONS
     if _cache.exists() and not force:
-        print("[Étape 4] Cache trouvé — rechargement des relations.")
-        with open(_cache, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        relations = [
-            MappingRelation(
-                **{
-                    k: v
-                    for k, v in d.items()
-                    if k in MappingRelation.__dataclass_fields__
-                }
-            )
-            for d in data
-        ]
-        print(f"  {len(relations)} relations chargées depuis le cache.")
-        return relations
+        print("[Step 4] Cache found — reloading relations.")
+        try:
+            data = _load_cache(_cache)
+        except ValueError as e:
+            print(f"  [cache invalid] {e}")
+        else:
+            relations = [
+                MappingRelation(**{k: v for k, v in d.items() if k in MappingRelation.__dataclass_fields__})
+                for d in data
+            ]
+            print(f"  {len(relations)} relations loaded from cache.")
+            return relations
 
     ref_A_map = {r.id: r for r in ref_A}
     ref_B_map = {r.id: r for r in ref_B}
@@ -1686,14 +1607,11 @@ def run_scorer(
 
     print(f"\n[Diagnostic étape 4]")
     print(f"  Paires scorées : {len(relations)}")
-    for rt in ["equivalence", "A_couvre_B", "B_couvre_A", "partielle", "aucun_lien"]:
+    for rt in ["equivalence", "A_covers_B", "B_covers_A", "partial", "no_link"]:
         n = sum(1 for r in relations if r.relation_type == rt)
         print(f"  {rt:20s} : {n}")
 
-    # Sauvegarder dans le bon cache
-    _cache.parent.mkdir(parents=True, exist_ok=True)
-    with open(_cache, "w", encoding="utf-8") as f:
-        json.dump([r.to_dict() for r in relations], f, ensure_ascii=False, indent=2)
+    _save_cache([r.to_dict() for r in relations], _cache)
 
     return relations
 
@@ -1716,14 +1634,14 @@ def run_cleanup(
     """
     clean, removed = [], []
     for r in relations:
-        if r.relation_type == "aucun_lien" or r.confidence < min_confidence:
+        if r.relation_type == "no_link" or r.confidence < min_confidence:
             removed.append(r)
         else:
             clean.append(r)
 
     print(
         f"[Étape 5] Nettoyage : {len(clean)} relations conservées, {len(removed)} supprimées "
-        f"(aucun_lien ou confiance < {min_confidence:.2f})"
+        f"(no_link ou confiance < {min_confidence:.2f})"
     )
     return clean, removed
 
@@ -1739,10 +1657,10 @@ def _export_html_review(
     """
     RELATION_CSS = {
         "equivalence": "#27ae60",
-        "A_couvre_B": "#3498db",
-        "B_couvre_A": "#e67e22",
-        "partielle": "#f39c12",
-        "aucun_lien": "#95a5a6",
+        "A_covers_B":  "#3498db",
+        "B_covers_A":  "#e67e22",
+        "partial":     "#f39c12",
+        "no_link":     "#95a5a6",
     }
 
     import html as _html
@@ -1807,11 +1725,11 @@ def _export_html_review(
   <p class="subtitle">{total} relations à valider</p>
 
   <div class="legend">
-    <span class="legend-item"><span class="badge" style="background:#27ae60">equivalence</span> Équivalence complète</span>
-    <span class="legend-item"><span class="badge" style="background:#3498db">A_couvre_B</span> A couvre B</span>
-    <span class="legend-item"><span class="badge" style="background:#e67e22">B_couvre_A</span> B couvre A</span>
-    <span class="legend-item"><span class="badge" style="background:#f39c12">partielle</span> Couverture partielle</span>
-    <span class="legend-item"><span class="badge" style="background:#95a5a6">aucun_lien</span> Aucun lien</span>
+    <span class="legend-item"><span class="badge" style="background:#27ae60">equivalence</span> Full equivalence</span>
+    <span class="legend-item"><span class="badge" style="background:#3498db">A_covers_B</span> A covers B</span>
+    <span class="legend-item"><span class="badge" style="background:#e67e22">B_covers_A</span> B covers A</span>
+    <span class="legend-item"><span class="badge" style="background:#f39c12">partial</span> Partial coverage</span>
+    <span class="legend-item"><span class="badge" style="background:#95a5a6">no_link</span> No link</span>
   </div>
 
   <div class="progress-wrap">
@@ -1928,110 +1846,48 @@ def _export_global(
     relations_all: dict[tuple[str, str], list[MappingRelation]],
     removed_flat: list[MappingRelation] | None = None,
 ) -> None:
-    """Exporte l'ensemble des relations (toutes paires confondues).
+    """Export all relations (all pairs combined).
 
-    Produit :
-    - data/outputs/mapping_all.json        (toutes relations, auto-suffisant avec framework_A/B)
-    - data/outputs/mapping_summary.xlsx    (1 feuille par paire + feuille "Global")
-    - data/outputs/mapping_all.html        (revue interactive)
+    Produces:
+    - data/outputs/mapping_all.json        (all relations, self-contained with framework_A/B)
+    - data/outputs/mapping_summary.xlsx    (1 sheet per pair + Global sheet)
+    - data/outputs/mapping_all.html        (interactive review)
     """
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
 
     all_relations = [r for rels in relations_all.values() for r in rels]
 
-    # ── JSON global ──────────────────────────────────────────────────────────
+    # ── Global JSON ──────────────────────────────────────────────────────────
     json_path = OUTPUT_DIR / "mapping_all.json"
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump([r.to_dict() for r in all_relations], f, ensure_ascii=False, indent=2)
+    _save_cache([r.to_dict() for r in all_relations], json_path)
     print(f"[Export] JSON global -> {json_path} ({len(all_relations)} relations)")
 
-    # ── HTML revue ───────────────────────────────────────────────────────────
+    # ── HTML review ───────────────────────────────────────────────────────────
     html_path = OUTPUT_DIR / "mapping_all.html"
     _export_html_review(all_relations, html_path)
 
-    # ── Excel multi-feuilles ─────────────────────────────────────────────────
+    # ── Multi-sheet Excel ─────────────────────────────────────────────────────
     try:
         wb = Workbook()
-        wb.remove(wb.active)  # supprimer la feuille vide par défaut
+        wb.remove(wb.active)  # remove default empty sheet
 
-        thin = Side(style="thin", color="CCCCCC")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        HEADERS = [
-            "Framework A",
-            "ID Ref A",
-            "Titre Ref A",
-            "Framework B",
-            "ID Ref B",
-            "Titre Ref B",
-            "Score sémantique",
-            "Coverage A→B",
-            "Coverage B→A",
-            "Confiance",
-            "Type de relation",
-            "Justification",
-        ]
-
-        def _write_sheet(ws, relations_list: list[MappingRelation]) -> None:
-            hdr_fill = PatternFill("solid", fgColor="1F4E79")
-            hdr_font = Font(bold=True, color="FFFFFF")
-            for col, h in enumerate(HEADERS, 1):
-                cell = ws.cell(row=1, column=col, value=h)
-                cell.fill = hdr_fill
-                cell.font = hdr_font
-                cell.alignment = Alignment(horizontal="center", wrap_text=True)
-                cell.border = border
-            for row_idx, r in enumerate(relations_list, 2):
-                vals = [
-                    r.framework_A,
-                    r.id_A,
-                    r.title_A,
-                    r.framework_B,
-                    r.id_B,
-                    r.title_B,
-                    r.semantic_score,
-                    r.coverage_A_to_B,
-                    r.coverage_B_to_A,
-                    r.confidence,
-                    r.relation_type,
-                    r.justification,
-                ]
-                row_fill = PatternFill(
-                    "solid", fgColor=RELATION_COLORS.get(r.relation_type, "FFFFFF")
-                )
-                for col_idx, val in enumerate(vals, 1):
-                    cell = ws.cell(row=row_idx, column=col_idx, value=val)
-                    cell.border = border
-                    cell.alignment = Alignment(wrap_text=True, vertical="top")
-                    if col_idx in (7, 8, 9, 10):
-                        cell.number_format = "0.00"
-                    if col_idx == 11:
-                        cell.fill = row_fill
-            col_widths = [18, 12, 45, 18, 12, 45, 12, 12, 12, 10, 18, 60]
-            for i, w in enumerate(col_widths, 1):
-                ws.column_dimensions[get_column_letter(i)].width = w
-            ws.freeze_panes = "A2"
-            ws.auto_filter.ref = ws.dimensions
-
-        # Feuille par paire
+        # Sheet per pair
         for (fw_i, fw_j), rels in relations_all.items():
             sheet_name = f"{fw_i[:12]} {fw_j[:12]}"[:31]  # Excel: max 31 chars
             _write_sheet(wb.create_sheet(sheet_name), rels)
 
-        # Feuille globale
+        # Global sheet
         _write_sheet(wb.create_sheet("Global"), all_relations)
 
-        # Feuille Supprimées
+        # Removed sheet
         if removed_flat:
-            _write_sheet(wb.create_sheet("Supprimées"), removed_flat)
+            _write_sheet(wb.create_sheet("Removed"), removed_flat)
 
         xlsx_path = OUTPUT_DIR / "mapping_summary.xlsx"
         wb.save(str(xlsx_path))
         print(f"[Export] Excel global -> {xlsx_path}")
     except Exception as e:
-        print(f"  [WARN] Export Excel global échoué : {e}")
+        print(f"  [WARN] Global Excel export failed: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
