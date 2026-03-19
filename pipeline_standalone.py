@@ -191,17 +191,90 @@ class MappingRelation:
 # ── Helpers de classification (réutilisés partout) ────────────────────────────
 
 
-def _infer_relation_type(cov_a: float, cov_b: float) -> str:
-    """Derives relation_type from coverage scores."""
-    if cov_a >= THRESHOLD_EQUIVALENCE and cov_b >= THRESHOLD_EQUIVALENCE:
+def _infer_relation_type(
+    cov_a: float,
+    cov_b: float,
+    thresh_eq: float = THRESHOLD_EQUIVALENCE,
+    thresh_cov: float = THRESHOLD_COVERAGE,
+) -> str:
+    """Classifie la relation à partir des scores de couverture LLM.
+
+    Les seuils sont paramétrables pour permettre l'ajustement adaptatif
+    calculé par _compute_adaptive_thresholds() selon la distribution des
+    scores sémantiques du dataset courant.
+    """
+    # Equivalence : A et B se couvrent mutuellement au-delà du seuil haut
+    if cov_a >= thresh_eq and cov_b >= thresh_eq:
         return "equivalence"
-    if cov_a >= THRESHOLD_COVERAGE and cov_b < THRESHOLD_COVERAGE:
+    # Couverture unilatérale A→B
+    if cov_a >= thresh_cov and cov_b < thresh_cov:
         return "A_covers_B"
-    if cov_b >= THRESHOLD_COVERAGE and cov_a < THRESHOLD_COVERAGE:
+    # Couverture unilatérale B→A
+    if cov_b >= thresh_cov and cov_a < thresh_cov:
         return "B_covers_A"
+    # Chevauchement partiel sans couverture dominante
     if cov_a >= 0.4 or cov_b >= 0.4:
         return "partial"
+    # Aucun lien significatif
     return "no_link"
+
+
+# Médiane de référence pour deux référentiels cross-domaine typiques.
+# Si la médiane des scores sémantiques s'éloigne de cette valeur, les
+# seuils sont ajustés proportionnellement pour éviter le biais de corpus.
+_ADAPTIVE_BASELINE_MEDIAN = 0.60
+_ADAPTIVE_SENSITIVITY = 0.25   # amplification du delta (0.10 médiane → 0.025 seuil)
+_ADAPTIVE_MAX_DELTA = 0.10     # borne max de l'ajustement dans chaque sens
+
+
+def _compute_adaptive_thresholds(
+    semantic_scores: list[float],
+    base_equiv: float = THRESHOLD_EQUIVALENCE,
+    base_cov: float = THRESHOLD_COVERAGE,
+) -> tuple[float, float, dict]:
+    """Ajuste les seuils de couverture selon la distribution des scores sémantiques.
+
+    Principe :
+    - Les référentiels sémantiquement proches (ex. ISO 27001 vs NIS2) produisent
+      une médiane de scores cosinus naturellement haute → risque de sur-classifier
+      des paires en "equivalence" avec les seuils par défaut.
+    - On compense en relevant les seuils proportionnellement à l'écart entre la
+      médiane observée et la médiane de référence (_ADAPTIVE_BASELINE_MEDIAN).
+    - L'ajustement est borné à ±_ADAPTIVE_MAX_DELTA pour rester conservatif.
+
+    Args:
+        semantic_scores: scores cosinus des paires candidates (Step 2).
+        base_equiv:      seuil d'équivalence de base (défaut THRESHOLD_EQUIVALENCE).
+        base_cov:        seuil de couverture de base (défaut THRESHOLD_COVERAGE).
+
+    Returns:
+        (thresh_eq, thresh_cov, stats) où stats contient les indicateurs
+        probabilistes utilisés pour l'ajustement (loggables / affichables).
+    """
+    arr = np.array(semantic_scores, dtype=float)
+
+    # Indicateurs probabilistes de la distribution
+    stats: dict = {
+        "n":      int(len(arr)),
+        "mean":   round(float(np.mean(arr)), 4),
+        "median": round(float(np.median(arr)), 4),
+        "q25":    round(float(np.percentile(arr, 25)), 4),
+        "q75":    round(float(np.percentile(arr, 75)), 4),
+        "p90":    round(float(np.percentile(arr, 90)), 4),
+    }
+
+    # Delta : positif si corpus dense (médiane haute) → relever les seuils
+    #         négatif si corpus sparse (médiane basse) → abaisser les seuils
+    delta = (stats["median"] - _ADAPTIVE_BASELINE_MEDIAN) * _ADAPTIVE_SENSITIVITY
+    delta = max(-_ADAPTIVE_MAX_DELTA, min(_ADAPTIVE_MAX_DELTA, delta))
+    stats["delta"] = round(delta, 4)
+
+    thresh_eq  = round(max(0.70, min(0.95, base_equiv + delta)), 3)
+    thresh_cov = round(max(0.60, min(0.90, base_cov  + delta)), 3)
+    stats["thresh_eq"]  = thresh_eq
+    stats["thresh_cov"] = thresh_cov
+
+    return thresh_eq, thresh_cov, stats
 
 
 @functools.lru_cache(maxsize=1)
@@ -809,17 +882,24 @@ def get_expected_count(framework_name: str) -> "int | None":
 
 
 def _save_cache(data: list[dict], path: Path) -> None:
-    """Save a versioned JSON cache file."""
+    """Sauvegarde un cache JSON versionné.
+
+    Le champ "_v" permet de détecter les caches obsolètes lors d'un changement
+    de logique pipeline. Bumper CACHE_VERSION invalide automatiquement tous les
+    caches existants sans avoir à les supprimer manuellement.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"_v": CACHE_VERSION, "data": data}, f, ensure_ascii=False, indent=2)
 
 
 def _load_cache(path: Path) -> list[dict]:
-    """Load a versioned JSON cache file. Raises ValueError on version mismatch."""
+    """Charge un cache JSON versionné. Lève ValueError si la version ne correspond pas."""
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     if isinstance(raw, dict):
+        # Vérification de version : si CACHE_VERSION a été bumped (nouveau modèle de
+        # données ou nouvelle logique), le cache est invalide → recalcul obligatoire
         if raw.get("_v") != CACHE_VERSION:
             raise ValueError(
                 f"Cache outdated in {path.name} "
@@ -1013,13 +1093,22 @@ def _select_pairs(
     semantic_threshold: float = SEMANTIC_THRESHOLD,
     top_k: int = TOP_K,
 ) -> list[CandidatePair]:
+    """Sélectionne les paires candidates à soumettre au LLM.
+
+    Stratégie : pour chaque exigence A, garder les TOP_K exigences B avec le
+    score cosinus le plus haut, sous réserve de dépasser SEMANTIC_THRESHOLD.
+    Cette double condition (top-k + seuil) réduit typiquement ~96 % des paires
+    inutiles avant l'appel LLM, limitant les coûts API.
+    """
     pairs = []
     seen = set()
     for i, req_a in enumerate(ref_A):
         scores = matrix[i]
+        # argsort croissant → inversion [::-1] → top scores en premier
         top_indices = np.argsort(scores)[::-1][:top_k]
         for j in top_indices:
             score = float(scores[j])
+            # Arrêt dès que le score passe sous le seuil (liste triée par score desc)
             if score < semantic_threshold:
                 break
             key = (req_a.id, ref_B[j].id)
@@ -1117,7 +1206,9 @@ def run_similarity_all(
     fw_keys = list(frameworks.keys())
     pairs_iter = list(combinations(fw_keys, 2))
 
-    # ── Early-exit: load all from cache if every pair is already cached ──────
+    # ── Early-exit : charger depuis le cache si toutes les paires sont déjà calculées.
+    # Optimisation critique : évite de recharger SentenceTransformer (~400 MB) et
+    # de ré-encoder toutes les exigences si rien n'a changé depuis le dernier run.
     if not force:
         all_cached = all(
             (DATA_DIR / f"candidate_pairs_{_cache_slug(fw_i, fw_j)}.json").exists()
@@ -1146,7 +1237,8 @@ def run_similarity_all(
 
     model = _get_embedding_model()
 
-    # Un seul encode() pour tout — embeddings indexés par fw_key
+    # Un seul encode() pour toutes les exigences de tous les référentiels →
+    # réutilisation des embeddings pour chaque paire (fw_i, fw_j) sans recalcul
     emb_by_fw: dict[str, np.ndarray] = {}
     for fw_key, reqs in frameworks.items():
         emb_by_fw[fw_key] = model.encode(
@@ -1283,37 +1375,37 @@ class LLMBatchOutput(BaseModel):
     results: list[LLMScoringOutput]
 
 
-PROMPT_INSTRUCTIONS = f"""Tu es un expert en mapping de référentiels de sécurité et conformité (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
+PROMPT_INSTRUCTIONS = f"""You are an expert in mapping security and compliance frameworks (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
 
-## Définitions
+## Definitions
 
-**coverage_A_to_B** (float 0.0–1.0) : proportion des objectifs de sécurité de B qui sont couverts ou satisfaits par A.
-- 1.0 = A adresse intégralement tous les objectifs de B
-- 0.8 = A couvre la majorité des objectifs de B, lacunes mineures
-- 0.5 = A couvre environ la moitié des objectifs de B
-- 0.2 = A effleure le sujet de B sans vraiment le couvrir
-- 0.0 = aucune relation
+**coverage_A_to_B** (float 0.0–1.0): proportion of B's security objectives that are covered or satisfied by A.
+- 1.0 = A fully addresses all of B's objectives
+- 0.8 = A covers most of B's objectives, minor gaps
+- 0.5 = A covers roughly half of B's objectives
+- 0.2 = A touches on B's topic but does not really cover it
+- 0.0 = no relationship
 
-**coverage_B_to_A** : même évaluation dans le sens B→A.
+**coverage_B_to_A**: same but in the B→A direction.
 
-**confidence** : ta certitude dans cette évaluation (0 = incertain, 1 = très certain).
+**confidence**: your certainty in this assessment (0 = uncertain, 1 = very certain).
 
-**justification** : 1–2 phrases expliquant tes scores et le type de relation. Sois factuel et précis (ex. : « A exige un inventaire des actifs, B ne demande qu'une classification — A couvre B mais pas l'inverse. »).
+**justification**: 1–2 sentences explaining your scores and relation type. Be factual and precise (e.g. "A requires asset inventory, B only requires asset classification — A covers B but not the reverse.").
 
-## Règles de classification du relation_type
+## relation_type classification rules
 
 | Condition | relation_type |
 |-----------|--------------|
-| coverage_A_to_B >= {THRESHOLD_EQUIVALENCE} ET coverage_B_to_A >= {THRESHOLD_EQUIVALENCE} | "equivalence" |
-| coverage_A_to_B >= {THRESHOLD_COVERAGE} ET coverage_B_to_A < {THRESHOLD_COVERAGE} | "A_covers_B" |
-| coverage_B_to_A >= {THRESHOLD_COVERAGE} ET coverage_A_to_B < {THRESHOLD_COVERAGE} | "B_covers_A" |
+| coverage_A_to_B >= {THRESHOLD_EQUIVALENCE} AND coverage_B_to_A >= {THRESHOLD_EQUIVALENCE} | "equivalence" |
+| coverage_A_to_B >= {THRESHOLD_COVERAGE} AND coverage_B_to_A < {THRESHOLD_COVERAGE} | "A_covers_B" |
+| coverage_B_to_A >= {THRESHOLD_COVERAGE} AND coverage_A_to_B < {THRESHOLD_COVERAGE} | "B_covers_A" |
 | max(coverage_A_to_B, coverage_B_to_A) >= 0.4 | "partial" |
-| sinon | "no_link" |
+| otherwise | "no_link" |
 
-## Cas particuliers
+## Special cases
 
-- Si les deux exigences sont **quasi-identiques** (même titre, même sujet) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95, justification="Les deux exigences adressent le même objectif de sécurité."
-- Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont sémantiquement proches."""
+- If both requirements are **near-identical** (same title, same subject) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95, justification="Both requirements address the same security objective."
+- Consider the **domain**: an access management requirement does not cover a backup requirement, even if titles are semantically close."""
 
 
 def _truncate(text: str, max_len: int = 300) -> str:
@@ -1324,7 +1416,7 @@ def _make_pair_text(idx: int, req_a: RequirementNormalized, req_b: RequirementNo
     tags_a = f" [{', '.join(req_a.tags[:3])}]" if req_a.tags else ""
     tags_b = f" [{', '.join(req_b.tags[:3])}]" if req_b.tags else ""
     return (
-        f"--- Paire {idx} ---\n"
+        f"--- Pair {idx} ---\n"
         f"A ({req_a.framework}{tags_a}): {req_a.title}\n"
         f"{_truncate(req_a.description) or '(no description)'}\n\n"
         f"B ({req_b.framework}{tags_b}): {req_b.title}\n"
@@ -1336,20 +1428,22 @@ def _build_prompt(pairs: list[tuple[RequirementNormalized, RequirementNormalized
     """Build a single prompt (instructions + data) for 1 or N pairs."""
     blocks = "\n\n".join(_make_pair_text(i + 1, a, b) for i, (a, b) in enumerate(pairs))
     n = len(pairs)
-    header = f"## Paire à évaluer\n\n" if n == 1 else f"## Paires à évaluer ({n})\n\n"
+    header = f"## Pair to evaluate\n\n" if n == 1 else f"## Pairs to evaluate ({n})\n\n"
     if n == 1:
-        fmt = "Réponds UNIQUEMENT avec du JSON valide, sans commentaire ni markdown.\nClés attendues : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."
+        fmt = "Respond ONLY with valid JSON, no comments, no markdown.\nExpected keys: coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."
     else:
         fmt = (
-            f'Réponds UNIQUEMENT avec du JSON valide, sans commentaire ni markdown.\n'
-            f'Format attendu : {{"results": [<scoring_paire_1>, ..., <scoring_paire_{n}>]}}\n'
-            f"Chaque scoring_paire contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.\n"
-            f'Le tableau "results" DOIT contenir exactement {n} éléments.'
+            f'Respond ONLY with valid JSON, no comments, no markdown.\n'
+            f'Expected format: {{"results": [<scoring_pair_1>, ..., <scoring_pair_{n}>]}}\n'
+            f"Each scoring_pair contains: coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.\n"
+            f'The "results" array MUST contain exactly {n} elements.'
         )
-    return f"{PROMPT_INSTRUCTIONS}\n\n{header}{blocks}\n\n## Format de réponse\n\n{fmt}"
+    return f"{PROMPT_INSTRUCTIONS}\n\n{header}{blocks}\n\n## Response format\n\n{fmt}"
 
 
 @retry(
+    # Retry avec back-off exponentiel (1s, 2s, 4s, 8s) sur toute exception.
+    # tenacity relance automatiquement en cas de rate-limit 429 ou timeout réseau.
     stop=stop_after_attempt(LLM_MAX_RETRIES + 1),
     wait=wait_exponential(multiplier=1, min=1, max=8),
     reraise=True,
@@ -1374,6 +1468,7 @@ async def _score_batch(
     """Score a batch of pairs in one API call. Falls back to 1-by-1 if parsing fails."""
     if not pairs:
         return []
+    # Construire le prompt avec les seuils adaptatifs courants
     prompt = _build_prompt(pairs)
     async with semaphore:
         try:
@@ -1385,6 +1480,7 @@ async def _score_batch(
                 raise ValueError(f"Expected {len(pairs)} results, got {len(batch_out.results)}")
             return batch_out.results
         except Exception as e:
+            # Fallback : rescorer chaque paire individuellement si le batch échoue
             if len(pairs) > 1:
                 print(f"  [LLM BATCH FALLBACK] {len(pairs)} pairs → 1-by-1 ({e})")
                 results = []
@@ -1404,9 +1500,11 @@ async def _run_scorer_async(
     batch_size: int,
 ) -> list[MappingRelation]:
     client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+    # Sémaphore global : limite le parallélisme LLM pour éviter rate-limit 429
     semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
 
-    # Découper les candidats en batches
+    # Découper les candidats en batches de taille LLM_BATCH_SIZE
+    # → réduit le nombre d'appels API de ~200 à ~20 pour un run typique
     pair_objects = [(ref_A_map[p.id_A], ref_B_map[p.id_B]) for p in candidates]
     batches = [
         pair_objects[i : i + batch_size]
@@ -1422,12 +1520,14 @@ async def _run_scorer_async(
         f"({n_calls} appels API, batch_size={batch_size}) ..."
     )
 
+    # Lancer tous les batches en parallèle (limité par le sémaphore)
     batch_tasks = [
-        _score_batch(client, semaphore, batch, llm_model) for batch in batches
+        _score_batch(client, semaphore, batch, llm_model)
+        for batch in batches
     ]
     batch_results = await asyncio.gather(*batch_tasks)
 
-    # Aplatir résultats
+    # Aplatir les résultats batch → liste de MappingRelation
     relations: list[MappingRelation] = []
     for cand_batch, results in zip(cand_batches, batch_results):
         for pair, result in zip(cand_batch, results):
@@ -1450,7 +1550,8 @@ async def _run_scorer_async(
                 )
             )
 
-    # Double vérification sur les paires à fort score
+    # Double vérification sur les paires à fort score (LLM_CONFIRM_THRESHOLD)
+    # → moyenne des deux passes pour réduire la variance du modèle
     high_score = [
         r
         for r in relations
@@ -1465,7 +1566,8 @@ async def _run_scorer_async(
             for i in range(0, len(confirm_pairs), batch_size)
         ]
         confirm_tasks = [
-            _score_batch(client, semaphore, b, llm_model) for b in confirm_batches
+            _score_batch(client, semaphore, b, llm_model)
+            for b in confirm_batches
         ]
         confirm_results_nested = await asyncio.gather(*confirm_tasks)
         confirm_results = [r for batch in confirm_results_nested for r in batch]
@@ -1475,6 +1577,7 @@ async def _run_scorer_async(
             if confirm is None:
                 continue
             orig = confirmed_map[(rel.id_A, rel.id_B)]
+            # Moyenne arithmétique des deux passes pour stabiliser le score
             cov_a = round((orig.coverage_A_to_B + confirm.coverage_A_to_B) / 2, 4)
             cov_b = round((orig.coverage_B_to_A + confirm.coverage_B_to_A) / 2, 4)
             orig.coverage_A_to_B = cov_a
@@ -1573,7 +1676,15 @@ def run_scorer(
     llm_model: str = LLM_MODEL,
     batch_size: int = LLM_BATCH_SIZE,
     cache_path: Path | None = None,
+    thresh_eq: float | None = None,
+    thresh_cov: float | None = None,
 ) -> list[MappingRelation]:
+    """Score LLM des paires candidates.
+
+    Si thresh_eq/thresh_cov ne sont pas fournis, ils sont calculés
+    automatiquement via _compute_adaptive_thresholds() à partir de la
+    distribution des scores sémantiques des candidats.
+    """
     _cache = cache_path or CACHE_RELATIONS
     if _cache.exists() and not force:
         print("[Step 4] Cache found — reloading relations.")
@@ -1589,11 +1700,38 @@ def run_scorer(
             print(f"  {len(relations)} relations loaded from cache.")
             return relations
 
+    # ── Calcul des seuils adaptatifs ──────────────────────────────────────────
+    # Si les seuils ne sont pas fournis explicitement, on les calcule à partir
+    # de la distribution des scores sémantiques pour éviter le biais de corpus.
+    if thresh_eq is None or thresh_cov is None:
+        scores = [p.semantic_score for p in candidates]
+        if scores:
+            _eq, _cov, stats = _compute_adaptive_thresholds(
+                scores,
+                base_equiv=thresh_eq if thresh_eq is not None else THRESHOLD_EQUIVALENCE,
+                base_cov=thresh_cov if thresh_cov is not None else THRESHOLD_COVERAGE,
+            )
+            thresh_eq  = _eq
+            thresh_cov = _cov
+            print(
+                f"  [Seuils adaptatifs] médiane={stats['median']:.3f}, "
+                f"mean={stats['mean']:.3f}, q25={stats['q25']:.3f}, "
+                f"q75={stats['q75']:.3f}, p90={stats['p90']:.3f}, "
+                f"delta={stats['delta']:+.3f} → "
+                f"thresh_eq={thresh_eq}, thresh_cov={thresh_cov}"
+            )
+        else:
+            thresh_eq  = thresh_eq  or THRESHOLD_EQUIVALENCE
+            thresh_cov = thresh_cov or THRESHOLD_COVERAGE
+
     ref_A_map = {r.id: r for r in ref_A}
     ref_B_map = {r.id: r for r in ref_B}
 
     relations = asyncio.run(
-        _run_scorer_async(candidates, ref_A_map, ref_B_map, llm_model, batch_size)
+        _run_scorer_async(
+            candidates, ref_A_map, ref_B_map, llm_model, batch_size,
+            thresh_eq=thresh_eq, thresh_cov=thresh_cov,
+        )
     )
 
     # Inject framework names (ref objects carry the canonical framework key)
@@ -1792,8 +1930,13 @@ def run_scorer_all(
     force: bool = False,
     llm_model: str = LLM_MODEL,
     batch_size: int = LLM_BATCH_SIZE,
+    thresh_eq: float | None = None,
+    thresh_cov: float | None = None,
 ) -> dict[tuple[str, str], list[MappingRelation]]:
     """Scorage LLM pour toutes les paires (fw_i, fw_j).
+
+    Les seuils adaptatifs sont calculés indépendamment pour chaque paire de
+    référentiels : la distribution sémantique CIS↔NIST peut différer de ISO↔NIS2.
 
     Injecte framework_A et framework_B dans chaque MappingRelation produite.
     Cache par paire dans OUTPUT_DIR/mapping_relations_{slug}.json.
@@ -1807,6 +1950,7 @@ def run_scorer_all(
             f"\n[Etape 4] {fw_i} <-> {fw_j} -- {len(candidates)} paires candidates ..."
         )
 
+        # thresh_eq/thresh_cov=None → calcul adaptatif par paire dans run_scorer()
         rels = run_scorer(
             candidates,
             frameworks[fw_i],
@@ -1815,6 +1959,8 @@ def run_scorer_all(
             llm_model=llm_model,
             batch_size=batch_size,
             cache_path=cache_rel,
+            thresh_eq=thresh_eq,
+            thresh_cov=thresh_cov,
         )
         # Injecter framework_A / framework_B
         for r in rels:

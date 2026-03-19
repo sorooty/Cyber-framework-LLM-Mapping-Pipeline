@@ -319,10 +319,10 @@ st.markdown("""
     font-weight: 600; letter-spacing: 0.04em; margin: 2px;
   }
   .equivalence { background: rgba(0,230,118,0.15); color: #00e676; border: 1px solid rgba(0,230,118,0.3); }
-  .A_couvre_B  { background: rgba(255,214,0,0.12);  color: #ffd600; border: 1px solid rgba(255,214,0,0.3); }
-  .B_couvre_A  { background: rgba(255,111,0,0.12);  color: #ff9100; border: 1px solid rgba(255,111,0,0.3); }
-  .partielle   { background: rgba(30,136,229,0.12); color: #40c4ff; border: 1px solid rgba(30,136,229,0.3); }
-  .aucun_lien  { background: rgba(80,80,80,0.2);    color: #9e9e9e; border: 1px solid rgba(120,120,120,0.2); }
+  .A_covers_B  { background: rgba(255,214,0,0.12);  color: #ffd600; border: 1px solid rgba(255,214,0,0.3); }
+  .B_covers_A  { background: rgba(255,111,0,0.12);  color: #ff9100; border: 1px solid rgba(255,111,0,0.3); }
+  .partial     { background: rgba(30,136,229,0.12); color: #40c4ff; border: 1px solid rgba(30,136,229,0.3); }
+  .no_link     { background: rgba(80,80,80,0.2);    color: #9e9e9e; border: 1px solid rgba(120,120,120,0.2); }
 
   /* ── Hero banner ── */
   .rh-hero {
@@ -505,10 +505,10 @@ st.markdown("""
     }
 
     .equivalence { background: rgba(0,178,72,0.10); color: #00823a; border-color: rgba(0,178,72,0.25); }
-    .A_couvre_B  { background: rgba(245,170,0,0.10); color: #b37800; border-color: rgba(245,170,0,0.25); }
-    .B_couvre_A  { background: rgba(230,90,0,0.10);  color: #a03800; border-color: rgba(230,90,0,0.25); }
-    .partielle   { background: rgba(0,120,200,0.08); color: #005fa3; border-color: rgba(0,120,200,0.2); }
-    .aucun_lien  { background: rgba(100,100,100,0.08); color: #666; border-color: rgba(150,150,150,0.2); }
+    .A_covers_B  { background: rgba(245,170,0,0.10); color: #b37800; border-color: rgba(245,170,0,0.25); }
+    .B_covers_A  { background: rgba(230,90,0,0.10);  color: #a03800; border-color: rgba(230,90,0,0.25); }
+    .partial     { background: rgba(0,120,200,0.08); color: #005fa3; border-color: rgba(0,120,200,0.2); }
+    .no_link     { background: rgba(100,100,100,0.08); color: #666; border-color: rgba(150,150,150,0.2); }
 
     .rh-hero {
       background: linear-gradient(135deg, #e6f9ee 0%, rgba(200,245,220,0.5) 100%);
@@ -595,7 +595,7 @@ with st.sidebar:
                                   index=0)
         min_conf  = st.slider("Confiance minimale (étape 5)", 0.0, 1.0, LLM_MIN_CONFIDENCE, 0.05,
                               help="Relations avec confiance < seuil seront supprimées à l'étape 5")
-        skip_cleanup = st.checkbox("Désactiver étape 5 (garder aucun_lien)", value=False)
+        skip_cleanup = st.checkbox("Désactiver étape 5 (garder no_link)", value=False)
     else:
         api_key      = ""
         llm_model    = LLM_MODEL
@@ -699,7 +699,7 @@ if run_btn:
                     total_clean = sum(len(v) for v in relations_all.values())
                     s.update(
                         label=(f"✅ Étape 5 — {total_clean} relations conservées, "
-                               f"{len(removed_flat)} supprimées (aucun_lien / conf < {min_conf:.2f})")
+                               f"{len(removed_flat)} supprimées (no_link / conf < {min_conf:.2f})")
                     )
         elif run_llm and not api_key:
             st.error("❌ Clé OpenAI manquante.")
@@ -862,8 +862,8 @@ if st.session_state.results:
             df_r = pd.DataFrame([rel.to_dict() for rel in relations])
 
             COLORS = {
-                "equivalence": "🟢", "A_couvre_B": "🟡",
-                "B_couvre_A": "🟠", "partielle": "🔵", "aucun_lien": "⚫",
+                "equivalence": "🟢", "A_covers_B": "🟡",
+                "B_covers_A": "🟠", "partial": "🔵", "no_link": "⚫",
             }
 
             # Filtre
