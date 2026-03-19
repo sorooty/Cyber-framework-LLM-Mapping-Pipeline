@@ -644,69 +644,73 @@ if run_btn:
 
     yaml_paths_selected = [str(frameworks[name]) for name in selected_fws]
 
-    # ── Étape 1 ──────────────────────────────────────────────────────────────
-    with st.status("**Étape 1** — Parsing & normalisation ...", expanded=True) as s:
-        t0 = time.time()
-        frameworks_data = run_ingestion_all(yaml_paths_selected, force=True)
-        total_reqs = sum(len(v) for v in frameworks_data.values())
-        summary = "  ·  ".join(f"{k}: {len(v)}" for k, v in frameworks_data.items())
-        s.update(label=f"✅ Étape 1 — {len(frameworks_data)} référentiels · {total_reqs} exigences  ({time.time()-t0:.1f}s) — {summary}")
-    results["frameworks_data"] = frameworks_data
-
-    # ── Étape 2 ──────────────────────────────────────────────────────────────
-    with st.status("**Étape 2** — Similarité sémantique (embeddings) ...", expanded=True) as s:
-        t0 = time.time()
-        candidates_all, matrices_all = run_similarity_all(
-            frameworks_data,
-            force=True,
-            semantic_threshold=sem_thresh,
-            top_k=top_k,
-        )
-        total_cands = sum(len(v) for v in candidates_all.values())
-        n_pairs = len(candidates_all)
-        s.update(label=f"✅ Étape 2 — {total_cands} paires candidates sur {n_pairs} combinaison(s)  ({time.time()-t0:.1f}s)")
-    results["candidates_all"] = candidates_all
-    results["matrices_all"]   = matrices_all
-
-    # ── Étape 3 — (heatmaps générées à la demande dans l'onglet) ─────────────
-    with st.status("**Étape 3** — Matrices de similarité prêtes ...", expanded=False) as s:
-        total_cells = sum(m.size for m in matrices_all.values())
-        s.update(label=f"✅ Étape 3 — {len(matrices_all)} matrice(s) prête(s) ({total_cells:,} cellules)  — heatmaps générées à la demande")
-
-    # ── Étape 4 (optionnel) ───────────────────────────────────────────────────
-    relations_all: dict[tuple[str, str], list] = {}
-    removed_flat: list = []
-    if run_llm and api_key:
-        with st.status("**Étape 4** — Scoring LLM ...", expanded=True) as s:
+    try:
+        # ── Étape 1 ──────────────────────────────────────────────────────────────
+        with st.status("**Étape 1** — Parsing & normalisation ...", expanded=True) as s:
             t0 = time.time()
-            os.environ["OPENAI_API_KEY"] = api_key
-            relations_all = run_scorer_all(
-                candidates_all, frameworks_data,
+            frameworks_data = run_ingestion_all(yaml_paths_selected, force=True)
+            total_reqs = sum(len(v) for v in frameworks_data.values())
+            summary = "  ·  ".join(f"{k}: {len(v)}" for k, v in frameworks_data.items())
+            s.update(label=f"✅ Étape 1 — {len(frameworks_data)} référentiels · {total_reqs} exigences  ({time.time()-t0:.1f}s) — {summary}")
+        results["frameworks_data"] = frameworks_data
+
+        # ── Étape 2 ──────────────────────────────────────────────────────────────
+        with st.status("**Étape 2** — Similarité sémantique (embeddings) ...", expanded=True) as s:
+            t0 = time.time()
+            candidates_all, matrices_all = run_similarity_all(
+                frameworks_data,
                 force=True,
-                llm_model=llm_model,
-                batch_size=LLM_BATCH_SIZE,
+                semantic_threshold=sem_thresh,
+                top_k=top_k,
             )
-            total_rels = sum(len(v) for v in relations_all.values())
-            s.update(label=f"✅ Étape 4 — {total_rels} relations scorées  ({time.time()-t0:.1f}s)")
+            total_cands = sum(len(v) for v in candidates_all.values())
+            n_pairs = len(candidates_all)
+            s.update(label=f"✅ Étape 2 — {total_cands} paires candidates sur {n_pairs} combinaison(s)  ({time.time()-t0:.1f}s)")
+        results["candidates_all"] = candidates_all
+        results["matrices_all"]   = matrices_all
 
-        # ── Étape 5 — Nettoyage ──────────────────────────────────────────────
-        if not skip_cleanup:
-            with st.status("**Étape 5** — Nettoyage des liaisons inutiles ...", expanded=True) as s:
-                relations_all, removed_flat = run_cleanup_all(
-                    relations_all, min_confidence=min_conf
-                )
-                total_clean = sum(len(v) for v in relations_all.values())
-                s.update(
-                    label=(f"✅ Étape 5 — {total_clean} relations conservées, "
-                           f"{len(removed_flat)} supprimées (aucun_lien / conf < {min_conf:.2f})")
-                )
-    elif run_llm and not api_key:
-        st.error("❌ Clé OpenAI manquante.")
+        # ── Étape 3 — (heatmaps générées à la demande dans l'onglet) ─────────────
+        with st.status("**Étape 3** — Matrices de similarité prêtes ...", expanded=False) as s:
+            total_cells = sum(m.size for m in matrices_all.values())
+            s.update(label=f"✅ Étape 3 — {len(matrices_all)} matrice(s) prête(s) ({total_cells:,} cellules)  — heatmaps générées à la demande")
 
-    results["relations_all"] = relations_all
-    results["removed_flat"]  = removed_flat
-    st.session_state.results = results
-    st.success("✅ Pipeline terminé !")
+        # ── Étape 4 (optionnel) ───────────────────────────────────────────────────
+        relations_all: dict[tuple[str, str], list] = {}
+        removed_flat: list = []
+        if run_llm and api_key:
+            with st.status("**Étape 4** — Scoring LLM ...", expanded=True) as s:
+                t0 = time.time()
+                os.environ["OPENAI_API_KEY"] = api_key
+                relations_all = run_scorer_all(
+                    candidates_all, frameworks_data,
+                    force=True,
+                    llm_model=llm_model,
+                    batch_size=LLM_BATCH_SIZE,
+                )
+                total_rels = sum(len(v) for v in relations_all.values())
+                s.update(label=f"✅ Étape 4 — {total_rels} relations scorées  ({time.time()-t0:.1f}s)")
+
+            # ── Étape 5 — Nettoyage ──────────────────────────────────────────────
+            if not skip_cleanup:
+                with st.status("**Étape 5** — Nettoyage des liaisons inutiles ...", expanded=True) as s:
+                    relations_all, removed_flat = run_cleanup_all(
+                        relations_all, min_confidence=min_conf
+                    )
+                    total_clean = sum(len(v) for v in relations_all.values())
+                    s.update(
+                        label=(f"✅ Étape 5 — {total_clean} relations conservées, "
+                               f"{len(removed_flat)} supprimées (aucun_lien / conf < {min_conf:.2f})")
+                    )
+        elif run_llm and not api_key:
+            st.error("❌ Clé OpenAI manquante.")
+
+        results["relations_all"] = relations_all
+        results["removed_flat"]  = removed_flat
+        st.session_state.results = results
+        st.success("✅ Pipeline terminé !")
+    except Exception as exc:
+        st.error(f"❌ Erreur pipeline : {exc}")
+        st.exception(exc)
 
 
 # ─ Display results ────────────────────────────────────────────────────────────

@@ -34,7 +34,7 @@ ENV/
 referential_mapping/data/
 
 # ── Outputs générés ──────────────────────────────────────────────────────────
-referential_mapping/data/outputs/
+data/
 
 # ── Documentation interne (générée / brouillons) ─────────────────────────────
 docs/
