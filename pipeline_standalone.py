@@ -52,7 +52,7 @@ import yaml
 
 dotenv.load_dotenv()
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer, util as st_util
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -78,10 +78,29 @@ TOP_K = 5
 
 # Étape 4 : LLM
 LLM_MODEL = "gpt-4o-mini"
-LLM_MAX_RETRIES = 2
+LLM_MAX_RETRIES = 4
 LLM_CONFIRM_THRESHOLD = 0.75
 LLM_CONCURRENCY = 20  # gpt-4o-mini tolère facilement 20 req. parallèles
 LLM_BATCH_SIZE = 10  # paires par appel API (1 appel → N paires)
+
+PROMPT_INSTRUCTIONS = """\
+## Instructions
+
+You are an expert in cybersecurity governance, risk, and compliance (GRC).
+Your task is to evaluate the semantic alignment between pairs of security requirements
+drawn from different compliance frameworks (e.g., CIS Controls, NIST CSF, ISO 27001,
+NIS2, DORA, SOC2).
+
+For each pair (A, B), assess:
+- **coverage_A_to_B** (float 0–1): to what extent requirement A covers the intent of B.
+- **coverage_B_to_A** (float 0–1): to what extent requirement B covers the intent of A.
+- **confidence** (float 0–1): your confidence in the above scores.
+- **relation_type**: one of equivalence | A_covers_B | B_covers_A | partial | no_link.
+- **justification**: a concise explanation (1–2 sentences) in English.
+
+Coverage scoring scale: 1.0 = complete, 0.75 = substantial, 0.5 = partial overlap, 0.25 = weak, 0.0 = none.
+Valid relation_type values (use exactly as written): equivalence | A_covers_B | B_covers_A | partial | no_link.\
+"""
 
 # Étape 5 : Nettoyage
 LLM_MIN_CONFIDENCE = 0.40  # confiance minimale pour garder une relation
@@ -1375,37 +1394,48 @@ class LLMBatchOutput(BaseModel):
     results: list[LLMScoringOutput]
 
 
-PROMPT_INSTRUCTIONS = f"""You are an expert in mapping security and compliance frameworks (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
+def _make_prompt_instructions(
+    thresh_eq: float = THRESHOLD_EQUIVALENCE,
+    thresh_cov: float = THRESHOLD_COVERAGE,
+) -> str:
+    """Génère le bloc d'instructions système du prompt LLM.
 
-## Definitions
+    Les seuils sont injectés dynamiquement afin que les règles de classification
+    communiquées au modèle reflètent exactement les seuils adaptatifs calculés
+    pour le corpus en cours — évitant toute incohérence entre ce que l'on demande
+    au LLM et la logique appliquée en post-traitement.
+    """
+    return f"""Tu es un expert en mapping de référentiels de sécurité et conformité (ISO 27001, NIST CSF, CIS Controls, NIS2, DORA, SOC2, etc.).
 
-**coverage_A_to_B** (float 0.0–1.0): proportion of B's security objectives that are covered or satisfied by A.
-- 1.0 = A fully addresses all of B's objectives
-- 0.8 = A covers most of B's objectives, minor gaps
-- 0.5 = A covers roughly half of B's objectives
-- 0.2 = A touches on B's topic but does not really cover it
-- 0.0 = no relationship
+## Définitions
 
-**coverage_B_to_A**: same but in the B→A direction.
+**coverage_A_to_B** (float 0.0–1.0) : proportion des objectifs de sécurité de B qui sont couverts ou satisfaits par A.
+- 1.0 = A adresse intégralement tous les objectifs de B
+- 0.8 = A couvre la majorité des objectifs de B, lacunes mineures
+- 0.5 = A couvre environ la moitié des objectifs de B
+- 0.2 = A effleure le sujet de B sans vraiment le couvrir
+- 0.0 = aucune relation
 
-**confidence**: your certainty in this assessment (0 = uncertain, 1 = very certain).
+**coverage_B_to_A** : même évaluation dans le sens B→A.
 
-**justification**: 1–2 sentences explaining your scores and relation type. Be factual and precise (e.g. "A requires asset inventory, B only requires asset classification — A covers B but not the reverse.").
+**confidence** : ta certitude dans cette évaluation (0 = incertain, 1 = très certain).
 
-## relation_type classification rules
+**justification** : 1–2 phrases expliquant tes scores et le type de relation. Sois factuel et précis (ex. : « A exige un inventaire des actifs, B ne demande qu'une classification — A couvre B mais pas l'inverse. »).
+
+## Règles de classification du relation_type
 
 | Condition | relation_type |
 |-----------|--------------|
-| coverage_A_to_B >= {THRESHOLD_EQUIVALENCE} AND coverage_B_to_A >= {THRESHOLD_EQUIVALENCE} | "equivalence" |
-| coverage_A_to_B >= {THRESHOLD_COVERAGE} AND coverage_B_to_A < {THRESHOLD_COVERAGE} | "A_covers_B" |
-| coverage_B_to_A >= {THRESHOLD_COVERAGE} AND coverage_A_to_B < {THRESHOLD_COVERAGE} | "B_covers_A" |
+| coverage_A_to_B >= {thresh_eq} ET coverage_B_to_A >= {thresh_eq} | "equivalence" |
+| coverage_A_to_B >= {thresh_cov} ET coverage_B_to_A < {thresh_cov} | "A_covers_B" |
+| coverage_B_to_A >= {thresh_cov} ET coverage_A_to_B < {thresh_cov} | "B_covers_A" |
 | max(coverage_A_to_B, coverage_B_to_A) >= 0.4 | "partial" |
-| otherwise | "no_link" |
+| sinon | "no_link" |
 
-## Special cases
+## Cas particuliers
 
-- If both requirements are **near-identical** (same title, same subject) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95, justification="Both requirements address the same security objective."
-- Consider the **domain**: an access management requirement does not cover a backup requirement, even if titles are semantically close."""
+- Si les deux exigences sont **quasi-identiques** (même titre, même sujet) → coverage_A_to_B=1.0, coverage_B_to_A=1.0, relation_type="equivalence", confidence=0.95, justification="Les deux exigences adressent le même objectif de sécurité."
+- Tiens compte du **domaine** : une exigence de gestion des accès ne couvre pas une exigence de sauvegarde, même si les titres sont sémantiquement proches."""
 
 
 def _truncate(text: str, max_len: int = 300) -> str:
@@ -1416,11 +1446,11 @@ def _make_pair_text(idx: int, req_a: RequirementNormalized, req_b: RequirementNo
     tags_a = f" [{', '.join(req_a.tags[:3])}]" if req_a.tags else ""
     tags_b = f" [{', '.join(req_b.tags[:3])}]" if req_b.tags else ""
     return (
-        f"--- Pair {idx} ---\n"
+        f"--- Paire {idx} ---\n"
         f"A ({req_a.framework}{tags_a}): {req_a.title}\n"
-        f"{_truncate(req_a.description) or '(no description)'}\n\n"
+        f"{_truncate(req_a.description) or '(sans description)'}\n\n"
         f"B ({req_b.framework}{tags_b}): {req_b.title}\n"
-        f"{_truncate(req_b.description) or '(no description)'}"
+        f"{_truncate(req_b.description) or '(sans description)'}"
     )
 
 
@@ -1442,10 +1472,10 @@ def _build_prompt(pairs: list[tuple[RequirementNormalized, RequirementNormalized
 
 
 @retry(
-    # Retry avec back-off exponentiel (1s, 2s, 4s, 8s) sur toute exception.
-    # tenacity relance automatiquement en cas de rate-limit 429 ou timeout réseau.
+    # Retry avec back-off exponentiel sur toute exception.
+    # max=65s couvre la fenêtre TPM d'une minute pour les rate-limits 429.
     stop=stop_after_attempt(LLM_MAX_RETRIES + 1),
-    wait=wait_exponential(multiplier=1, min=1, max=8),
+    wait=wait_exponential(multiplier=2, min=2, max=65),
     reraise=True,
 )
 async def _call_api(client: AsyncOpenAI, prompt: str, model: str) -> str:
@@ -1479,6 +1509,11 @@ async def _score_batch(
             if len(batch_out.results) != len(pairs):
                 raise ValueError(f"Expected {len(pairs)} results, got {len(batch_out.results)}")
             return batch_out.results
+        except (RateLimitError, AuthenticationError):
+            # Ne pas tomber en fallback 1-by-1 :
+            # - RateLimitError (429) : le fallback consommerait 10x plus de tokens
+            # - AuthenticationError (401) : même clé → même échec garanti
+            raise
         except Exception as e:
             # Fallback : rescorer chaque paire individuellement si le batch échoue
             if len(pairs) > 1:
@@ -1498,6 +1533,8 @@ async def _run_scorer_async(
     ref_B_map: dict[str, RequirementNormalized],
     llm_model: str,
     batch_size: int,
+    thresh_eq: float = THRESHOLD_EQUIVALENCE,
+    thresh_cov: float = THRESHOLD_COVERAGE,
 ) -> list[MappingRelation]:
     client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
     # Sémaphore global : limite le parallélisme LLM pour éviter rate-limit 429
@@ -1545,7 +1582,7 @@ async def _run_scorer_async(
                     coverage_A_to_B=cov_a,
                     coverage_B_to_A=cov_b,
                     confidence=result.confidence,
-                    relation_type=_infer_relation_type(cov_a, cov_b),
+                    relation_type=_infer_relation_type(cov_a, cov_b, thresh_eq, thresh_cov),
                     justification=result.justification,
                 )
             )
@@ -1583,7 +1620,7 @@ async def _run_scorer_async(
             orig.coverage_A_to_B = cov_a
             orig.coverage_B_to_A = cov_b
             orig.confidence = round((orig.confidence + confirm.confidence) / 2, 4)
-            orig.relation_type = _infer_relation_type(cov_a, cov_b)
+            orig.relation_type = _infer_relation_type(cov_a, cov_b, thresh_eq, thresh_cov)
             # Conserver la justification la plus détaillée (passe 2 si disponible)
             if confirm.justification:
                 orig.justification = confirm.justification

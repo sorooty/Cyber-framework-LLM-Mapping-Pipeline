@@ -4,6 +4,7 @@ app.py — Interface de démonstration du pipeline de mapping référentiels.
 Lancement :
     streamlit run app.py
 """
+import io
 import os
 import sys
 import time
@@ -914,35 +915,63 @@ if st.session_state.results:
     with tabs[3]:
         st.subheader("Export des résultats")
 
+        _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        def _relations_to_xlsx(rels) -> bytes:
+            """Build an in-memory Excel workbook from a list of MappingRelation."""
+            import openpyxl
+            buf = io.BytesIO()
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Mapping"
+            _write_sheet(ws, rels)
+            wb.save(buf)
+            return buf.getvalue()
+
+        def _df_to_xlsx(df: pd.DataFrame) -> bytes:
+            """Build an in-memory Excel workbook from a DataFrame."""
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False)
+            return buf.getvalue()
+
+        # Paires candidates
         df_c = pd.DataFrame([c.to_dict() for c in candidates])
-        csv_candidates = df_c.to_csv(index=False).encode("utf-8")
         st.download_button(
-            f"📥 Paires candidates — {fw_i} ↔ {fw_j} (CSV)",
-            data=csv_candidates,
-            file_name=f"candidates_{fw_i}_vs_{fw_j}.csv",
-            mime="text/csv",
+            f"📥 Paires candidates — {fw_i} ↔ {fw_j} (Excel)",
+            data=_df_to_xlsx(df_c),
+            file_name=f"candidates_{fw_i}_vs_{fw_j}.xlsx",
+            mime=_XLSX_MIME,
         )
 
+        # Mapping final de la paire sélectionnée
         if relations:
-            df_r = pd.DataFrame([rel.to_dict() for rel in relations])
-            csv_relations = df_r.to_csv(index=False).encode("utf-8")
             st.download_button(
-                f"📥 Mapping final — {fw_i} ↔ {fw_j} (CSV)",
-                data=csv_relations,
-                file_name=f"mapping_{fw_i}_vs_{fw_j}.csv",
-                mime="text/csv",
+                f"📥 Mapping final — {fw_i} ↔ {fw_j} (Excel)",
+                data=_relations_to_xlsx(relations),
+                file_name=f"mapping_{fw_i}_vs_{fw_j}.xlsx",
+                mime=_XLSX_MIME,
             )
 
         # Export global (toutes paires) si LLM lancé
         if relations_all:
             all_rels = [rel for v in relations_all.values() for rel in v]
-            df_all = pd.DataFrame([rel.to_dict() for rel in all_rels])
-            csv_all = df_all.to_csv(index=False).encode("utf-8")
+
             st.download_button(
-                f"📥 Mapping global — toutes paires ({len(all_rels)} relations) (CSV)",
-                data=csv_all,
-                file_name="mapping_all_frameworks.csv",
-                mime="text/csv",
+                f"📥 Mapping global — toutes paires ({len(all_rels)} relations) (Excel)",
+                data=_relations_to_xlsx(all_rels),
+                file_name="mapping_all_frameworks.xlsx",
+                mime=_XLSX_MIME,
+            )
+
+            json_all_rels = json.dumps(
+                [rel.to_dict() for rel in all_rels], ensure_ascii=False, indent=2
+            ).encode("utf-8")
+            st.download_button(
+                f"📥 Mapping global — toutes paires ({len(all_rels)} relations) (JSON)",
+                data=json_all_rels,
+                file_name="mapping_all_frameworks.json",
+                mime="application/json",
             )
 
         # JSON des exigences normalisées pour la paire sélectionnée
