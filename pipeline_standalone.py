@@ -83,6 +83,8 @@ LLM_CONFIRM_THRESHOLD = 0.75
 LLM_CONCURRENCY = 20  # gpt-4o-mini tolère facilement 20 req. parallèles
 LLM_BATCH_SIZE = 10  # paires par appel API (1 appel → N paires)
 
+# Dépréciée — conservée pour rétrocompatibilité CLI uniquement.
+# _build_prompt() utilise désormais _make_prompt_instructions() (voir plus bas).
 PROMPT_INSTRUCTIONS = """\
 ## Instructions
 
@@ -110,7 +112,7 @@ THRESHOLD_EQUIVALENCE = 0.85
 THRESHOLD_COVERAGE = 0.75
 
 # Cache versioning — bump when pipeline logic or data model changes
-CACHE_VERSION = "3"
+CACHE_VERSION = "4"
 
 # Module-level RELATION_COLORS (used in Excel + HTML exports)
 RELATION_COLORS: dict[str, str] = {
@@ -1210,11 +1212,21 @@ def run_similarity_all(
     force: bool = False,
     semantic_threshold: float = SEMANTIC_THRESHOLD,
     top_k: int = TOP_K,
+    sources: list[str] | None = None,
+    targets: list[str] | None = None,
 ) -> tuple[
     dict[tuple[str, str], list[CandidatePair]], dict[tuple[str, str], np.ndarray]
 ]:
     """Encode toutes les exigences en UN seul passage, puis calcule les similarités
-    pour chaque paire (fw_i, fw_j) avec i < j.
+    pour chaque paire (fw_i, fw_j).
+
+    Mode par défaut (sources=None, targets=None) :
+        Toutes les combinaisons fw_i × fw_j avec i < j (comportement historique).
+
+    Mode asymétrique (sources + targets fournis) :
+        Uniquement les paires (fw_a, fw_b) avec fw_a ∈ sources, fw_b ∈ targets,
+        fw_a ≠ fw_b. Permet de mapper N nouveaux référentiels contre M existants
+        sans recalculer les paires déjà en cache.
 
     Returns:
         candidates_all : dict[(fw_i, fw_j), list[CandidatePair]]
@@ -1223,7 +1235,21 @@ def run_similarity_all(
     from itertools import combinations
 
     fw_keys = list(frameworks.keys())
-    pairs_iter = list(combinations(fw_keys, 2))
+
+    if sources is not None and targets is not None:
+        # Mode asymétrique : sources × targets, dédoublonné, clés normalisées (min, max)
+        seen: set[tuple[str, str]] = set()
+        pairs_iter = []
+        for fw_a in sources:
+            for fw_b in targets:
+                if fw_a == fw_b:
+                    continue
+                key = (min(fw_a, fw_b), max(fw_a, fw_b))
+                if key not in seen:
+                    seen.add(key)
+                    pairs_iter.append(key)
+    else:
+        pairs_iter = list(combinations(fw_keys, 2))
 
     # ── Early-exit : charger depuis le cache si toutes les paires sont déjà calculées.
     # Optimisation critique : évite de recharger SentenceTransformer (~400 MB) et
@@ -1455,20 +1481,24 @@ def _make_pair_text(idx: int, req_a: RequirementNormalized, req_b: RequirementNo
 
 
 def _build_prompt(pairs: list[tuple[RequirementNormalized, RequirementNormalized]]) -> str:
-    """Build a single prompt (instructions + data) for 1 or N pairs."""
+    """Construit le prompt complet (instructions + données) pour 1 ou N paires."""
     blocks = "\n\n".join(_make_pair_text(i + 1, a, b) for i, (a, b) in enumerate(pairs))
     n = len(pairs)
-    header = f"## Pair to evaluate\n\n" if n == 1 else f"## Pairs to evaluate ({n})\n\n"
+    instructions = _make_prompt_instructions()
+    header = "## Paire à évaluer\n\n" if n == 1 else f"## Paires à évaluer ({n})\n\n"
     if n == 1:
-        fmt = "Respond ONLY with valid JSON, no comments, no markdown.\nExpected keys: coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."
+        fmt = (
+            "Réponds UNIQUEMENT avec du JSON valide, sans commentaires, sans markdown.\n"
+            "Clés attendues : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification."
+        )
     else:
         fmt = (
-            f'Respond ONLY with valid JSON, no comments, no markdown.\n'
-            f'Expected format: {{"results": [<scoring_pair_1>, ..., <scoring_pair_{n}>]}}\n'
-            f"Each scoring_pair contains: coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.\n"
-            f'The "results" array MUST contain exactly {n} elements.'
+            f'Réponds UNIQUEMENT avec du JSON valide, sans commentaires, sans markdown.\n'
+            f'Format attendu : {{"results": [<scoring_paire_1>, ..., <scoring_paire_{n}>]}}\n'
+            f"Chaque scoring_paire contient : coverage_A_to_B, coverage_B_to_A, confidence, relation_type, justification.\n"
+            f'Le tableau "results" DOIT contenir exactement {n} éléments.'
         )
-    return f"{PROMPT_INSTRUCTIONS}\n\n{header}{blocks}\n\n## Response format\n\n{fmt}"
+    return f"{instructions}\n\n{header}{blocks}\n\n## Format de réponse\n\n{fmt}"
 
 
 @retry(

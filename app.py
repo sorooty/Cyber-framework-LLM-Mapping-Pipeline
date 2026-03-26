@@ -45,6 +45,7 @@ from pipeline_standalone import (
     run_ingestion_all, run_similarity_all, run_heatmaps_all,
     run_scorer_all, run_cleanup_all, _export_global,
     run_similarity, run_scorer, run_cleanup, _export_results,
+    _write_sheet,
     EMBEDDING_MODEL, SEMANTIC_THRESHOLD, TOP_K, LLM_MODEL,
     LLM_MIN_CONFIDENCE, LLM_BATCH_SIZE,
 )
@@ -566,14 +567,47 @@ with st.sidebar:
     fw_names = sorted(frameworks.keys())
 
     st.subheader("📂 Référentiels")
+
     _pref = [f for f in ["cis-controls-v8", "nistCsfV2"] if f in fw_names]
-    _default_fw = _pref if len(_pref) == 2 else fw_names[:2]
-    selected_fws = st.multiselect(
-        "Sélectionner les référentiels (min. 2)",
-        options=fw_names,
-        default=_default_fw,
-        help="Sélectionne 2 référentiels ou plus — toutes les paires seront mappées",
-    )
+    _default_fw = _pref if len(_pref) >= 1 else fw_names[:2]
+
+    col_src, col_tgt = st.columns(2)
+    with col_src:
+        st.caption("📥 **À mapper**")
+        sources_fws = st.multiselect(
+            "Sources",
+            options=fw_names,
+            default=_default_fw,
+            label_visibility="collapsed",
+            help="Référentiels à mapper — ex. les nouveaux référentiels à intégrer",
+            key="sources_fws",
+        )
+    with col_tgt:
+        st.caption("🗂️ **Contre**")
+        targets_fws = st.multiselect(
+            "Cibles",
+            options=fw_names,
+            default=_default_fw,
+            label_visibility="collapsed",
+            help="Référentiels cibles — ex. les référentiels déjà mappés",
+            key="targets_fws",
+        )
+
+    # Tags nouveau / existant : un ref est "nouveau" s'il est uniquement dans sources
+    _src_set = set(sources_fws)
+    _tgt_set = set(targets_fws)
+    _new_fws  = _src_set - _tgt_set   # uniquement dans sources
+    _old_fws  = _tgt_set - _src_set   # uniquement dans targets
+    if _new_fws or _old_fws:
+        badges = []
+        for f in sorted(_new_fws):
+            badges.append(f"🟢 `{f}` *nouveau*")
+        for f in sorted(_old_fws):
+            badges.append(f"🔵 `{f}` *existant*")
+        st.caption("  ·  ".join(badges))
+
+    # Union pour l'ingestion (étape 1 charge tous les référentiels concernés)
+    selected_fws = sorted(set(sources_fws) | set(targets_fws))
 
     st.divider()
     st.subheader("⚙️ Paramètres")
@@ -626,12 +660,21 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-_pair_labels = [f"**`{a}`** ↔ **`{b}`**" for a, b in __import__("itertools").combinations(selected_fws, 2)]
-if selected_fws:
+_src_set_main = set(sources_fws)
+_tgt_set_main = set(targets_fws)
+_effective_pairs = [
+    (a, b) for a in sorted(_src_set_main) for b in sorted(_tgt_set_main) if a != b
+]
+_pair_labels = [f"**`{a}`** ↔ **`{b}`**" for a, b in _effective_pairs]
+if sources_fws or targets_fws:
     st.markdown("  &nbsp;·&nbsp;  ".join(_pair_labels) if _pair_labels else "")
 
-if len(selected_fws) < 2:
-    st.warning("⚠️ Sélectionne au moins 2 référentiels dans la barre latérale.")
+if not sources_fws or not targets_fws:
+    st.warning("⚠️ Sélectionne au moins 1 référentiel dans chaque panneau (sources et cibles).")
+    st.stop()
+
+if not _effective_pairs:
+    st.warning("⚠️ Aucune paire à mapper — les référentiels sources et cibles sont identiques.")
     st.stop()
 
 # ─ State ─────────────────────────────────────────────────────────────────────
@@ -663,6 +706,8 @@ if run_btn:
                 force=True,
                 semantic_threshold=sem_thresh,
                 top_k=top_k,
+                sources=sources_fws,
+                targets=targets_fws,
             )
             total_cands = sum(len(v) for v in candidates_all.values())
             n_pairs = len(candidates_all)
