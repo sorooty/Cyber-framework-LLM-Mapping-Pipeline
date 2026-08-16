@@ -57,9 +57,9 @@ High-scoring pairs (`≥ LLM_CONFIRM_THRESHOLD`) go through a **second LLM pass*
 
 ```
 RiskHunter/
-├── app.py                          # Streamlit UI — interactive demo
+├── app.py                          # Streamlit UI - interactive demo
 ├── pipeline_standalone.py          # Single-file pipeline (all logic, no package dependency)
-├── notebook.py                     # Marimo notebook — run the pipeline step by step
+├── notebook.py                     # Marimo notebook (run the pipeline step by step) - DEPRECATED (kept for reference)
 ├── requirements.txt
 ├── .env                            # OPENAI_API_KEY (local only, gitignored)
 ├── files/
