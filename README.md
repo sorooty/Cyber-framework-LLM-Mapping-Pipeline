@@ -1,4 +1,4 @@
-# RiskHunter — Referential Mapping Pipeline
+# Referential Mapping Pipeline
 
 > Automatically map security requirements across compliance frameworks using semantic search and LLM verification.
 
